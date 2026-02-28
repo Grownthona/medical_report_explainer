@@ -17,4 +17,4 @@ async def root():
 async def create_upload_file(file: UploadFile = File(...)):
     ocr = OCRService()
     name = await ocr._extract_from_image(file)
-    return {"text": name}
+    return {"result": name}
