@@ -9,6 +9,8 @@ const router = express.Router();
 const path = require("path");
 const fs = require("fs");
 const uploadDir = "uploads";
+const axios = require("axios");
+const FormData = require("form-data");
 
 
 const { explainMedicalReport } = require('../services/geminiService');
@@ -114,16 +116,22 @@ async function extractPDFText(filePath) {
 }
 
 // Image OCR
-async function extractTextFromImage(imagePath) {
-  const processedPath = await preprocessImage(imagePath);
-  const { data: { text } } = await Tesseract.recognize(processedPath, "eng");
-  
-  const cleanedReport = text
-  // .replace(/[^\x00-\x7F]/g, "")  // remove weird unicode
-  .replace(/\s+/g, " ")          // normalize spaces
-  //.replace(/[_=]{2,}/g, "")      // remove OCR lines
-  .trim();
-  return cleanedReport;
+async function extractTextFromImage(filePath) {
+  // const processedPath = await preprocessImage(imagePath);
+  // const { data: { text } } = await Tesseract.recognize(processedPath, "eng");
+
+  const form = new FormData();
+  form.append("file", fs.createReadStream(filePath));
+
+  try {
+    const response = await axios.post("http://127.0.0.1:8000/extract/text/", form, {
+      headers: form.getHeaders(),
+    });
+    return response.data.result;
+  } catch (error) {
+    console.error("Error calling FastAPI:", error.message);
+    throw error;
+  }
 }
 
 router.post("/multiple", (req, res) => {
@@ -147,7 +155,6 @@ router.post("/multiple", (req, res) => {
           reportText =  await extractTextFromImage(file.path);
         }
         const analysis = await explainMedicalReport(reportText);
-        //console.log("analysis:",analysis);
       
         return res.json({
             success: true,

@@ -13,8 +13,8 @@ app = FastAPI()
 async def root():
     return {"message": "Hello World"}
 
-@app.post("/uploadfile/")
+@app.post("/extract/text/")
 async def create_upload_file(file: UploadFile = File(...)):
-    ocr = OCRService()
-    name = await ocr._extract_from_image(file)
-    return {"result": name}
+    ocr_service = OCRService()
+    ocr_result = await ocr_service._extract_from_image(file)
+    return {"result": ocr_result}

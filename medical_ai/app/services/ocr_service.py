@@ -37,29 +37,30 @@ class OCRService:
 
         # Convert PIL → OpenCV
         processed_image = cv2.cvtColor(np.array(processed_image), cv2.COLOR_RGB2BGR)
-        processed_path = f"processed_{file.filename}"
+        processed_path = f"processed/processed_{file.filename}"
+        os.makedirs("processed", exist_ok=True)
         cv2.imwrite(processed_path, processed_image)
 
         # table_engine = PPStructure(show_log=False)
         result = self.ocr.ocr(processed_path, cls=True)
-        print("Sample result:", result[:3]) 
+        
         # SORT HERE
         sorted_rows = self.sort_ocr_results(result[0], line_threshold=30)
 
-        formatted_text = []
+        # formatted_text = []
         extracted_text = ""
 
         for box, (text, confidence) in sorted_rows:
-            formatted_text.append(
-                f"<span style='font-weight: bold;'>~ {text}</span> - : {confidence:.2f}"
-            )
+            # formatted_text.append(
+            #     f"<span style='font-weight: bold;'>~ {text}</span> - : {confidence:.2f}"
+            # )
             extracted_text += text + " "
 
 
         os.remove(file_location)
-        combined_text = "<br>".join(formatted_text)
+        #combined_text = "<br>".join(formatted_text)
         
-        return combined_text
+        return extracted_text
     
     def sort_ocr_results(self, lines, line_threshold=10):
 
