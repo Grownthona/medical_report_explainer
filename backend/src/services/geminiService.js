@@ -323,26 +323,27 @@ function safeParseJSON(str) {
       `;
 
       try {
-          // const cleanedPrompt = cleanReport(prompt);
+          //const prompt = explainMedicalReport(reportText);
 
           // console.log("clean promt:", cleanedPrompt);
-          // const result = await model.generateContent(prompt);
-          // // Check both possible properties
+          const result = await model.generateContent(prompt);
+          // Check both possible properties
   
-          // //const responseText = result?.candidates?.[0]?.content || result?.output_text;
-          // const responseText = result.response.text();
+          //const responseText = result?.candidates?.[0]?.content || result?.output_text;
+          const responseText = result.response.text();
 
-          // if (!responseText) {
-          //     return { error: "Gemini returned empty response" };
-          // }
-          // const parsedOutput = safeParseJSON(responseText);
+          if (!responseText) {
+              return { error: "Gemini returned empty response" };
+          }
+          const parsedOutput = safeParseJSON(responseText);
 
-          // if (!parsedOutput) {
-          //     console.error("Failed to parse JSON:", responseText);
-          //     return { error: "Gemini returned invalid JSON", raw: responseText };
-          // }
+          if (!parsedOutput) {
+              console.error("Failed to parse JSON:", responseText);
+              return { error: "Gemini returned invalid JSON", raw: responseText };
+          }
 
-          return testResult;
+          //console.log(parsedOutput)
+          return parsedOutput;
 
       } catch (error) {
           console.error("Gemini API Error:", error.response?.data || error.message);
