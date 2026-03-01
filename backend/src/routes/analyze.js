@@ -134,48 +134,63 @@ async function extractTextFromImage(filePath) {
   }
 }
 
-router.post("/multiple", (req, res) => {
-  upload.array("medicalFiles", 5)(req, res, async (err) => {
-    if (err) {
-      console.error("Upload error:", err);
-      return res.status(400).json({ error: err.message });
+// POST /multiple
+router.post("/multiple", upload.array("medicalFiles", 5), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "No files uploaded" });
     }
-    const uploadedFiles = req.files.map(f => ({
-      originalName: f.originalname,
-      savedAs: f.filename,
-      path: f.path
-    }));
+
     const results = [];
+
     for (const file of req.files) {
-      let reportText = "";
       try {
+        let reportText = "";
+
+        // Extract text based on file type
         if (file.mimetype === "application/pdf") {
-          reportText =  await extractPDFText(file.path);
+          reportText = await extractPDFText(file.path);
         } else {
-          reportText =  await extractTextFromImage(file.path);
+          reportText = await extractTextFromImage(file.path);
         }
+
+        // Analyze medical report
         const analysis = await explainMedicalReport(reportText);
-      
-        return res.json({
-            success: true,
-            extractedText: reportText.substring(0, 2000), // Return first 2000 chars for display
-            summary: analysis.summary,
-            advice: analysis.advice,
-            risk_level: analysis.risk_level,
-            tests_analysis: analysis.tests_analysis
+
+        // Push structured result
+        results.push({
+          filename: file.originalname,
+          success: true,
+          extractedTextPreview: reportText.substring(0, 1000),
+          summary: analysis.summary,
+          advice: analysis.advice,
+          risk_level: analysis.risk_level,
+          tests_analysis: analysis.tests_analysis
         });
 
-        
-      } catch (error) {
-        console.error("Error processing file", file.originalname, error);
+      } catch (fileError) {
+        console.error("Error processing:", file.originalname, fileError);
+
         results.push({
-          error: error.message
+          filename: file.originalname,
+          success: false,
+          error: fileError.message
         });
       }
     }
 
-    res.json({ message: "Files processed successfully", files: results });
-  });
+    console.log(results);
+    // ✅ Send response AFTER all files processed
+    return res.json({
+      success: true,
+      totalFiles: req.files.length,
+      processed: results
+    });
+
+  } catch (err) {
+    console.error("Server error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
 module.exports = router;

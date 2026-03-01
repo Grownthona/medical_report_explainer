@@ -228,22 +228,6 @@ function safeParseJSON(str) {
     return JSON.parse(match[0]);
   }
 
-  function ocrQualityScore(text) {
-    const totalChars = text.length;
-    const unreadable = (text.match(/[^\x00-\x7F]/g) || []).length;
-
-    if (totalChars < 50) return "LOW";
-    if ((unreadable / totalChars) > 0.05) return "LOW";
-    return "HIGH";
-  }
-
-  function getFinalOcrQuality(confidence, text) {
-    const heuristic = ocrQualityScore(text);
-    if (confidence < 60 || heuristic === "LOW") return "LOW";
-    if (confidence < 85) return "MEDIUM";
-    return "HIGH";
-  }
-
   // Remove unwanted characters and normalize spaces
   function cleanReport(report) {
     if (!report) return "";
@@ -257,7 +241,7 @@ function safeParseJSON(str) {
     //report = report.replace(/[^\x00-\x7F]/g, "");
 
     return report.trim();
-}
+  }
 /**
  * Main Medical Explanation Function
  */

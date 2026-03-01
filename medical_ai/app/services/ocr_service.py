@@ -23,9 +23,9 @@ class OCRService:
         if file.content_type not in ["image/jpeg", "image/png", "application/pdf"]:
             raise HTTPException(status_code=400, detail="Unsupported file type")
 
-        file_location = f"uploads/{file.filename}"
+        file_location = f"app/uploads/{file.filename}"
 
-        os.makedirs("uploads", exist_ok=True)
+        os.makedirs("app/uploads", exist_ok=True)
 
         # copying file into uploads folder
         with open(file_location, "wb") as buffer:
@@ -37,8 +37,8 @@ class OCRService:
 
         # Convert PIL → OpenCV
         processed_image = cv2.cvtColor(np.array(processed_image), cv2.COLOR_RGB2BGR)
-        processed_path = f"processed/processed_{file.filename}"
-        os.makedirs("processed", exist_ok=True)
+        processed_path = f"app/processed/processed_{file.filename}"
+        os.makedirs("app/processed", exist_ok=True)
         cv2.imwrite(processed_path, processed_image)
 
         # table_engine = PPStructure(show_log=False)
@@ -115,8 +115,8 @@ class OCRService:
             if area < 1000:
                 continue
 
-            # If contour is in bottom 15% of image
-            if y > height * 0.85:
+            # If contour is in bottom 10% of image
+            if y > height * 0.87:
                 signature_top = min(signature_top, y)
 
         # Crop ABOVE signature

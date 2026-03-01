@@ -10,10 +10,9 @@ export default function Home() {
 
   
   const [files, setFiles] = useState([]);
-  const [summary, setSummary] = useState("");
-  const [advice, setAdvice] = useState("");
+  const [reports, setReports] = useState([]);
+
   const [loading, setLoading] = useState(false);
-  const [tests_analysis, setAnalysis] = useState("");
   // const [risk_level, setRiskLevel] = useState("");
   // const [voice_script, setVoiceScript] = useState("");
   // const [response, setResponse] = useState("");
@@ -31,15 +30,19 @@ export default function Home() {
       );
       console.log(res.data);
       alert("Files uploaded successfully");
-      const summary = { title: "Summary", description:  res.data.summary};
-      const advice = { title: "Advice", description: res.data.advice };
-      const tests_analysis = { title: "Analysis", description: res.data.tests_analysis };
-      setSummary(summary);
-      setAdvice(advice);
-      setAnalysis(tests_analysis);
-      // setRiskLevel(JSON.stringify(res.data.risk_level, null, 2));
-      // setVoiceScript(JSON.stringify(res.data.voice_script, null, 2));
-      // setResponse(JSON.stringify(res.data.analysis, null, 2));
+      if (res.data.success) {
+        setReports(res.data.processed); // store full array
+        alert("Files processed successfully");
+      }
+      // const summary = { title: "Summary", description:  res.data.summary};
+      // const advice = { title: "Advice", description: res.data.advice };
+      // const tests_analysis = { title: "Analysis", description: res.data.tests_analysis };
+      // setSummary(summary);
+      // setAdvice(advice);
+      // setAnalysis(tests_analysis);
+      // // setRiskLevel(JSON.stringify(res.data.risk_level, null, 2));
+      // // setVoiceScript(JSON.stringify(res.data.voice_script, null, 2));
+      // // setResponse(JSON.stringify(res.data.analysis, null, 2));
     } catch (err) {
       console.error(err);
     }
@@ -70,7 +73,64 @@ export default function Home() {
           <button onClick={sendReport}>
             Analyze Report
           </button>
-          {loading && summary && advice && (< TypingSummary summary={[summary, tests_analysis ,advice]} tests_analysis={tests_analysis} />)}
+          {/* {loading && summary && advice && (< TypingSummary summary={[summary, tests_analysis ,advice]} tests_analysis={tests_analysis} />)} */}
+
+           {loading && reports.map((report, index) => (
+          <div key={index} className="report-card">
+            <h2>{report.filename}</h2>
+
+            {report.success ? (
+              <>
+                <h3>Summary</h3>
+                <p>{report.summary}</p>
+
+                <h3>Tests Analysis</h3>
+
+                {report.tests_analysis?.map((test, i) => (
+                  <div key={i} className="test-card">
+                    <h4>{test.test_name}</h4>
+
+                    <p>
+                      <strong>Result:</strong> {test.value} {test.unit}
+                    </p>
+
+                    <p>
+                      <strong>Reference Range:</strong> {test.reference_range}
+                    </p>
+
+                    <p>
+                      <strong>Status:</strong>{" "}
+                      <span
+                        style={{
+                          color:
+                            test.status === "High"
+                              ? "red"
+                              : test.status === "Low"
+                              ? "orange"
+                              : "green"
+                        }}
+                      >
+                        {test.status}
+                      </span>
+                    </p>
+
+                    <p>
+                      <strong>Explanation:</strong> {test.result_explanation}
+                    </p>
+
+                    <p>
+                      <strong>Keyword Info:</strong> {test.keyword_explanation}
+                    </p>
+
+                    <hr />
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p style={{ color: "red" }}>Error: {report.error}</p>
+            )}
+          </div>
+        ))}
          
          
         </div>
