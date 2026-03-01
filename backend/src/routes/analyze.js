@@ -14,6 +14,7 @@ const FormData = require("form-data");
 
 
 const { explainMedicalReport } = require('../services/geminiService');
+const { json } = require("body-parser");
 
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
@@ -155,7 +156,7 @@ router.post("/multiple", upload.array("medicalFiles", 5), async (req, res) => {
         }
 
         // Analyze medical report
-        const analysis = await explainMedicalReport(reportText);
+        //const analysis = await explainMedicalReport(reportText);
 
         // Push structured result
         results.push({
@@ -179,8 +180,8 @@ router.post("/multiple", upload.array("medicalFiles", 5), async (req, res) => {
       }
     }
 
-    console.log(results);
-    // ✅ Send response AFTER all files processed
+    console.log(JSON.stringify(results));
+    // Send response AFTER all files processed
     return res.json({
       success: true,
       totalFiles: req.files.length,

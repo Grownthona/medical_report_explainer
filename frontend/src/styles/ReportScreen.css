@@ -1,0 +1,238 @@
+/* ── Report Screen ──────────────────────────────────────────────────────────── */
+.report-root {
+  padding: 24px 32px 60px;
+  animation: fadeIn 0.35s ease;
+}
+
+/* Patient banner */
+.report-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #fff;
+  border: 1px solid #e8e3dc;
+  border-radius: 16px;
+  padding: 14px 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+  flex-wrap: wrap;
+}
+.report-banner__avatar {
+  width: 46px; height: 46px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #dbeafe, #e0f2fe);
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #bfdbfe;
+  flex-shrink: 0;
+}
+.report-banner__info { flex: 1; min-width: 0; }
+.report-banner__name {
+  font-family: 'Fraunces', 'Georgia', serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1c1917;
+}
+.report-banner__meta { font-size: 12px; color: #78716c; margin-top: 2px; }
+.report-banner__files { font-size: 11px; color: #a8a29e; margin-top: 1px; }
+.report-banner__pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 30px;
+  flex-shrink: 0;
+}
+.report-banner__pill-dot { width: 7px; height: 7px; border-radius: 50%; }
+.report-banner__pill-label { font-size: 11.5px; font-weight: 700; letter-spacing: 0.3px; }
+
+/* Content grid */
+.report-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.report-col { display: flex; flex-direction: column; gap: 16px; }
+
+/* Box card */
+.report-box {
+  background: #fff;
+  border: 1px solid #e8e3dc;
+  border-radius: 16px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  animation: fadeUp 0.4s ease;
+}
+.report-box__title { font-size: 13.5px; font-weight: 700; color: #1c1917; margin-bottom: 13px; }
+
+/* Summary */
+.report-summary-accent { border-left: 3px solid #2563eb; padding-left: 14px; }
+.report-summary-text { font-size: 13.5px; color: #57534e; line-height: 1.8; }
+
+/* Highlights */
+.report-highlight { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+.report-highlight__dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #2563eb;
+  margin-top: 7px;
+  flex-shrink: 0;
+}
+.report-highlight__text { font-size: 13.5px; color: #57534e; line-height: 1.65; }
+
+/* Next steps */
+.report-nextstep { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.report-nextstep__num {
+  width: 24px; height: 24px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.report-nextstep__text { font-size: 13.5px; color: #57534e; line-height: 1.65; }
+
+/* Stats row */
+.report-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+.report-stat {
+  border-radius: 12px;
+  padding: 13px 14px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.report-stat__value {
+  font-family: 'Fraunces', 'Georgia', serif;
+  font-size: 26px;
+  font-weight: 700;
+}
+.report-stat__label { font-size: 11px; color: #a8a29e; margin-top: 2px; }
+
+/* Test filter tabs */
+.report-test-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.report-test-tab {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid #e8e3dc;
+  background: transparent;
+  color: #78716c;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.report-test-tab--active {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+/* Individual test row */
+.report-test-row {
+  border: 1px solid;
+  border-radius: 12px;
+  padding: 11px 13px;
+  cursor: pointer;
+  margin-bottom: 7px;
+  transition: all 0.18s;
+}
+.report-test-row__top { display: flex; align-items: center; gap: 10px; }
+.report-test-row__left { display: flex; align-items: center; gap: 10px; flex: 1; }
+.report-test-row__icon {
+  width: 27px; height: 27px;
+  border-radius: 7px;
+  border: 1px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.report-test-row__name { font-size: 13px; font-weight: 600; color: #1c1917; }
+.report-test-row__cat { font-size: 10.5px; color: #a8a29e; margin-top: 1px; }
+.report-test-row__right { text-align: right; margin-right: 4px; }
+.report-test-row__value { font-size: 13.5px; font-weight: 700; }
+.report-test-row__ref { font-size: 10.5px; color: #a8a29e; margin-top: 1px; }
+.report-test-row__chevron {
+  font-size: 17px;
+  color: #c4bdb6;
+  transition: transform 0.2s;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* Expanded test note */
+.report-test-expand { margin-top: 9px; }
+.report-test-expand__divider { height: 1px; background: #f0edea; margin-bottom: 8px; }
+.report-test-expand__text { font-size: 13px; color: #78716c; line-height: 1.75; }
+
+.report-tests-hint {
+  font-size: 11px;
+  color: #c4bdb6;
+  text-align: center;
+  margin-top: 7px;
+  font-style: italic;
+}
+
+/* Disclaimer strip */
+.report-disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 15px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+}
+.report-disclaimer__text { font-size: 12px; color: #92400e; line-height: 1.6; }
+
+/* Floating chat button (FAB) */
+.report-fab {
+  position: fixed;
+  bottom: 32px;
+  right: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 22px;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  color: #fff;
+  border: none;
+  border-radius: 50px;
+  box-shadow: 0 8px 28px rgba(37,99,235,0.35);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 200;
+  transition: all 0.25s;
+  white-space: nowrap;
+}
+.report-fab--open {
+  padding: 13px 16px;
+  background: linear-gradient(135deg, #475569, #334155);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+}
+.report-fab__icon { font-size: 19px; line-height: 1; }
+.report-fab__label { font-size: 13.5px; font-weight: 700; }
+
+/* Floating chat panel */
+.report-chat-float {
+  position: fixed;
+  bottom: 92px;
+  right: 32px;
+  width: 380px;
+  height: 520px;
+  z-index: 199;
+  animation: chatPop 0.3s ease;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(37,99,235,0.18), 0 4px 16px rgba(0,0,0,0.1);
+}

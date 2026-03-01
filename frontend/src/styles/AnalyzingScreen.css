@@ -1,0 +1,119 @@
+/* ── Analyzing Screen ───────────────────────────────────────────────────────── */
+.analyzing-root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 54px);
+  background: #f5f3ef;
+}
+
+.analyzing-card {
+  background: #fff;
+  border: 1px solid #e8e3dc;
+  border-radius: 20px;
+  padding: 36px 44px;
+  width: 360px;
+  text-align: center;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.08);
+  animation: fadeUp 0.4s ease;
+}
+
+/* Scan animation box */
+.analyzing-scan-box {
+  width: 66px; height: 80px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  margin: 0 auto 24px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.analyzing-scan-box__icon { font-size: 30px; position: relative; z-index: 2; }
+.analyzing-scan-box__line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #2563eb, transparent);
+  animation: scanline 1.3s linear infinite;
+  z-index: 3;
+}
+.analyzing-scan-box__corner {
+  position: absolute;
+  width: 10px; height: 10px;
+}
+.analyzing-scan-box__corner--tl {
+  top: 5px; left: 5px;
+  border-top: 2px solid #2563eb;
+  border-left: 2px solid #2563eb;
+}
+.analyzing-scan-box__corner--br {
+  bottom: 5px; right: 5px;
+  border-bottom: 2px solid #2563eb;
+  border-right: 2px solid #2563eb;
+}
+
+/* Spinner */
+.analyzing-spinner-wrap { width: 44px; height: 44px; margin: 0 auto 16px; position: relative; }
+.analyzing-spinner-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid #e8e3dc;
+  border-top-color: #2563eb;
+  animation: spin 0.8s linear infinite;
+}
+
+.analyzing-title {
+  font-family: 'Fraunces', 'Georgia', serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: #1c1917;
+  margin-bottom: 5px;
+}
+.analyzing-filename {
+  font-size: 12px;
+  color: #a8a29e;
+  margin-bottom: 20px;
+  word-break: break-all;
+}
+
+/* Steps list */
+.analyzing-steps { text-align: left; margin-bottom: 20px; }
+.analyzing-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  transition: opacity 0.3s;
+}
+.analyzing-step__dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.analyzing-step__dot--done    { background: #16a34a; }
+.analyzing-step__dot--current { background: #2563eb; }
+.analyzing-step__dot--pending { background: #d4cfc8; }
+
+.analyzing-step__text { font-size: 13px; transition: color 0.3s; }
+.analyzing-step__text--done    { color: #78716c; }
+.analyzing-step__text--current { color: #1c1917; }
+.analyzing-step__text--pending { color: #c4bdb6; }
+
+/* Progress bar */
+.analyzing-track {
+  height: 3px;
+  background: #f0edea;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.analyzing-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #0ea5e9);
+  animation: progress 2.7s linear forwards;
+  border-radius: 10px;
+}

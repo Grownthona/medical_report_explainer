@@ -1,0 +1,195 @@
+/* ── App Shell ──────────────────────────────────────────────────────────────── */
+.app-root {
+  min-height: 100vh;
+  background: #f5f3ef;
+  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── App Bar ─────────────────────────────────────────────────────────────────── */
+.app-bar {
+  background: #ffffff;
+  border-bottom: 1px solid #e8e3dc;
+  display: flex;
+  align-items: stretch;
+  padding-left: 24px;
+  height: 54px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+}
+
+/* Brand */
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-right: 20px;
+  border-right: 1px solid #ede9e4;
+  flex-shrink: 0;
+}
+.app-brand__icon { font-size: 18px; }
+.app-brand__text {
+  font-family: 'Fraunces', 'Georgia', serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1c1917;
+  letter-spacing: -0.3px;
+}
+.app-brand__blue { color: #2563eb; }
+.app-brand__badge {
+  font-size: 9px;
+  font-weight: 800;
+  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 20px;
+  letter-spacing: 0.8px;
+}
+
+/* Tabs area */
+.app-tabs-wrap {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-left: 4px;
+}
+.app-tabs-wrap::-webkit-scrollbar { display: none; }
+
+/* Patient tab */
+.app-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  position: relative;
+  white-space: nowrap;
+  min-width: 150px;
+  transition: background 0.15s;
+  cursor: pointer;
+}
+.app-tab--active { background: #faf9f7; }
+
+.app-tab__indicator {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: #2563eb;
+  transform-origin: left;
+  animation: tabPop 0.2s ease;
+  border-radius: 2px 2px 0 0;
+}
+
+.app-tab__avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.app-tab__avatar--active { background: #dbeafe; color: #1d4ed8; }
+.app-tab__avatar--idle   { background: #f0edea; color: #57534e; }
+
+.app-tab__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+}
+.app-tab__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.app-tab__name--active { color: #1c1917; }
+.app-tab__name--idle   { color: #78716c; }
+
+.app-tab__risk { font-size: 10.5px; font-weight: 500; }
+
+.app-tab__close {
+  font-size: 16px;
+  color: #78716c;
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  line-height: 1;
+  margin-left: 2px;
+  transition: opacity 0.15s;
+}
+
+/* Add Patient button */
+.app-add-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  border: none;
+  border-left: 1px solid #ede9e4;
+  background: transparent;
+  color: #78716c;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-left: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.app-add-tab:hover,
+.app-add-tab--drag { background: #eff6ff; }
+.app-add-tab__icon { font-size: 17px; color: #2563eb; line-height: 1; }
+.app-add-tab__label { font-size: 12.5px; font-weight: 500; }
+
+/* Analyzing tab */
+.app-busy-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-left: 1px solid #ede9e4;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+.app-busy-tab__spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #e8e3dc;
+  border-top-color: #2563eb;
+  animation: spin 0.7s linear infinite;
+}
+.app-busy-tab__label { font-size: 12.5px; color: #78716c; }
+
+/* Bar right side */
+.app-bar-right {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+  border-left: 1px solid #ede9e4;
+  flex-shrink: 0;
+}
+.app-bar-right__divider {
+  width: 1px;
+  height: 20px;
+  background: #ede9e4;
+}
+.app-bar-right__count {
+  font-size: 12px;
+  color: #a8a29e;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Body */
+.app-body { flex: 1; overflow: auto; }
