@@ -149,24 +149,26 @@ router.post("/multiple", upload.array("medicalFiles", 5), async (req, res) => {
         let reportText = "";
 
         // Extract text based on file type
-        if (file.mimetype === "application/pdf") {
-          reportText = await extractPDFText(file.path);
-        } else {
-          reportText = await extractTextFromImage(file.path);
-        }
+        //if (file.mimetype === "application/pdf") {
+        // reportText = await extractPDFText(file.path);
+        // } else {
+           reportText = await extractTextFromImage(file.path);
+        // }
 
         // Analyze medical report
         //const analysis = await explainMedicalReport(reportText);
 
         // Push structured result
+
+        console.log(reportText)
         results.push({
           filename: file.originalname,
           success: true,
           extractedTextPreview: reportText.substring(0, 1000),
-          summary: analysis.summary,
-          advice: analysis.advice,
-          risk_level: analysis.risk_level,
-          tests_analysis: analysis.tests_analysis
+          // summary: analysis[0].summary,
+          // advice: analysis[0].advice,
+          // risk_level: analysis[0].risk_level,
+          // tests_analysis: analysis[0].tests_analysis
         });
 
       } catch (fileError) {
@@ -180,7 +182,7 @@ router.post("/multiple", upload.array("medicalFiles", 5), async (req, res) => {
       }
     }
 
-    console.log(JSON.stringify(results));
+    // console.log(JSON.stringify(results));
     // Send response AFTER all files processed
     return res.json({
       success: true,

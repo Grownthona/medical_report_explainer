@@ -1,67 +1,114 @@
+import io
 import os
 import shutil
 import cv2
-from PIL import Image, ImageFilter, ImageEnhance
+import base64
+import asyncio
+import logging
 import numpy as np
-from fastapi import UploadFile, File, HTTPException
+from typing import Union
+
 from paddleocr import PaddleOCR
+from PIL import Image, ImageFilter, ImageEnhance
+from fastapi import UploadFile, File, HTTPException
 # from paddleocr import PPStructure
 
+
+logger = logging.getLogger(__name__)
 class OCRService:
+    
     def __init__(self):
-        self.ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    lang='en',
-                    det_db_thresh=0.5,
-                    det_db_box_thresh=0.6,
-                    det_db_unclip_ratio=1.5,
-                    rec_algorithm='SVTR_LCNet',
-                    use_gpu=False
-                )
-        
-    async def _extract_from_image(self, file: UploadFile = File(...)):
+        self._paddle_ocr = None
+        self._init_engines()
+
+    def _init_engines(self):
+        try:
+            self._paddle_ocr = PaddleOCR(
+                use_angle_cls=True,
+                lang='en',
+                det_db_thresh=0.5,
+                det_db_box_thresh=0.6,
+                det_db_unclip_ratio=1.5,
+                rec_algorithm='SVTR_LCNet',
+                use_gpu=False
+            )
+            logger.info("✅ PaddleOCR initialized")
+        except ImportError:
+            logger.warning("PaddleOCR not available, falling back to Tesseract")
+
+    async def extract_text(self, file: UploadFile = File(...)) -> str:
+        """Main entry point. Returns extracted text string."""
+
         if file.content_type not in ["image/jpeg", "image/png", "application/pdf"]:
             raise HTTPException(status_code=400, detail="Unsupported file type")
 
-        file_location = f"app/uploads/{file.filename}"
+        file_bytes = await file.read()
+        loop = asyncio.get_event_loop()
 
-        os.makedirs("app/uploads", exist_ok=True)
+        if file.content_type == "application/pdf":
+            return await loop.run_in_executor(None, self._extract_from_pdf, file_bytes)
+        else:
+            return await loop.run_in_executor(None, self._extract_from_image, file_bytes)
 
-        # copying file into uploads folder
-        with open(file_location, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
 
-        image = cv2.imread(file_location)
+    def _extract_from_image(self, image_bytes: bytes) -> str:
 
-        processed_image = self._preprocess_image(file_location)
+        img = Image.open(io.BytesIO(image_bytes))
+        img = self._preprocess_image(image_bytes)
+        # file_location = f"app/uploads/{file.filename}"
 
         # Convert PIL → OpenCV
-        processed_image = cv2.cvtColor(np.array(processed_image), cv2.COLOR_RGB2BGR)
-        processed_path = f"app/processed/processed_{file.filename}"
-        os.makedirs("app/processed", exist_ok=True)
-        cv2.imwrite(processed_path, processed_image)
+        processed_image = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
-        # table_engine = PPStructure(show_log=False)
-        result = self.ocr.ocr(processed_path, cls=True)
-        
-        # SORT HERE
-        sorted_rows = self.sort_ocr_results(result[0], line_threshold=30)
+        # processed_path = f"app/processed/processed_{file.filename}"
+        # os.makedirs("app/processed", exist_ok=True)
+        # cv2.imwrite(processed_path, processed_image)
 
-        # formatted_text = []
-        extracted_text = ""
+        if self._paddle_ocr:
+            try:
+                img_array = np.array(processed_image)
+                result = self._paddle_ocr.ocr(img_array, cls=True)
+                # SORT HERE
+                sorted_rows = self.sort_ocr_results(result[0], line_threshold=30)
+                # formatted_text = []
+                extracted_text = ""
 
-        for box, (text, confidence) in sorted_rows:
-            # formatted_text.append(
-            #     f"<span style='font-weight: bold;'>~ {text}</span> - : {confidence:.2f}"
-            # )
-            extracted_text += text + " "
+                for box, (text, confidence) in sorted_rows:
+                    # formatted_text.append(
+                    #     f"<span style='font-weight: bold;'>~ {text}</span> - : {confidence:.2f}"
+                    # )
+                    extracted_text += text + " "
+                    
+                    #combined_text = "<br>".join(formatted_text)
+                return extracted_text
+            except Exception as e:
+                logger.error(f"PaddleOCR failed: {e}")
 
-
-        os.remove(file_location)
-        #combined_text = "<br>".join(formatted_text)
-        
-        return extracted_text
+        raise RuntimeError("No OCR engine available. Install paddleocr or pytesseract.")
     
+
+    def _extract_from_pdf(self, pdf_bytes: bytes) -> str:
+        """Extract text from PDF - try direct text extraction first, then OCR."""
+
+        import pdfplumber
+
+        text_pages = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                # Try direct text extraction (faster, more accurate for digital PDFs)
+                page_text = page.extract_text()
+                if page_text and len(page_text.strip()) > 50:
+                    text_pages.append(page_text)
+                else:
+                    # Scanned PDF - render page as image then OCR
+                    img = page.to_image(resolution=300).original
+                    img_bytes = io.BytesIO()
+                    img.save(img_bytes, format="PNG")
+                    ocr_text = self._extract_from_image(img_bytes.getvalue())
+                    text_pages.append(ocr_text)
+
+        return "\n\n--- PAGE BREAK ---\n\n".join(text_pages)
+
     def sort_ocr_results(self, lines, line_threshold=10):
 
         """Group boxes into rows, then sort left-to-right within each row."""
@@ -80,8 +127,11 @@ class OCRService:
 
         return [item for row in rows for item in row]
     
-    def crop_remove_signature(self, image_path):
-        image = cv2.imread(image_path)
+    def crop_remove_signature(self, img_bytes : bytes):
+
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
         if image is None:
             raise ValueError("Image could not be loaded.")
         
@@ -128,11 +178,11 @@ class OCRService:
         return cropped
     
 
-    def _preprocess_image(self, image_path):
+    def _preprocess_image(self, image:bytes):
         """Enhance image quality before OCR."""
 
         # Crop Signature
-        cropped_image = self.crop_remove_signature(image_path)
+        cropped_image = self.crop_remove_signature(image)
 
         # Convert OpenCV (BGR) → RGB
         cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)

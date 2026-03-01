@@ -16,5 +16,5 @@ async def root():
 @app.post("/extract/text/")
 async def create_upload_file(file: UploadFile = File(...)):
     ocr_service = OCRService()
-    ocr_result = await ocr_service._extract_from_image(file)
+    ocr_result = await ocr_service.extract_text(file)
     return {"result": ocr_result}
