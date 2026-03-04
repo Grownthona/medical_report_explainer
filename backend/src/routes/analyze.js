@@ -128,7 +128,7 @@ async function extractTextFromImage(filePath) {
     const response = await axios.post("http://127.0.0.1:8000/extract/text/", form, {
       headers: form.getHeaders(),
     });
-    return response.data.result;
+    return response.data;
   } catch (error) {
     console.error("Error calling FastAPI:", error.message);
     throw error;
@@ -160,11 +160,12 @@ router.post("/multiple", upload.array("medicalFiles", 5), async (req, res) => {
 
         // Push structured result
 
-        console.log(reportText)
+        console.log(reportText.text)
+        console.log(JSON.stringify(reportText.entities))
         results.push({
           filename: file.originalname,
           success: true,
-          extractedTextPreview: reportText.substring(0, 1000),
+          //extractedTextPreview: reportText.substring(0, 1000),
           // summary: analysis[0].summary,
           // advice: analysis[0].advice,
           // risk_level: analysis[0].risk_level,

@@ -5,7 +5,9 @@ import os
 
 from fastapi import FastAPI, File, UploadFile
 from services.ocr_service import OCRService;
-
+from services.report_assembler import assemble_report;
+from models.schemas import MedicalNERResponse
+from models.schemas import MedicalEntityOut
 app = FastAPI()
 
 
@@ -13,8 +15,14 @@ app = FastAPI()
 async def root():
     return {"message": "Hello World"}
 
-@app.post("/extract/text/")
-async def create_upload_file(file: UploadFile = File(...)):
-    ocr_service = OCRService()
-    ocr_result = await ocr_service.extract_text(file)
-    return {"result": ocr_result}
+@app.post(
+    "/extract/text"
+)
+async def extract_medical(file: UploadFile = File(...)):
+    text = await OCRService().extract_text(file)
+
+    entities = assemble_report(text)
+    return {
+        "text": text,
+        "entities": entities
+    }
