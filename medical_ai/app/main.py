@@ -9,6 +9,7 @@ from services.report_assembler import assemble_report;
 from models.schemas import MedicalNERResponse
 from models.schemas import MedicalEntityOut
 from services.xray_report import XRayService
+from services.classifier import classify
 app = FastAPI()
 
 from paddleocr import PaddleOCR
@@ -27,8 +28,13 @@ async def extract_medical(file: UploadFile = File(...)):
     text = await OCRService().extract_text(file,file_bytes)
     if text is None or text == "":
         xray = XRayService().analyze(file_bytes)
-        return xray
+        return xray    
     
+    classification = classify(text)
+
+    return {
+        "classification" : classification
+    }
     #entities = assemble_report(text)
     # return {
     #     "text": text,
