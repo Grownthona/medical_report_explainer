@@ -8,7 +8,10 @@ from services.ocr_service import OCRService;
 from services.report_assembler import assemble_report;
 from models.schemas import MedicalNERResponse
 from models.schemas import MedicalEntityOut
+from services.xray_report import XRayService
 app = FastAPI()
+
+from paddleocr import PaddleOCR
 
 
 @app.get("/")
@@ -19,10 +22,15 @@ async def root():
     "/extract/text"
 )
 async def extract_medical(file: UploadFile = File(...)):
-    text = await OCRService().extract_text(file)
 
-    entities = assemble_report(text)
-    return {
-        "text": text,
-        "entities": entities
-    }
+    file_bytes = await file.read()
+    text = await OCRService().extract_text(file,file_bytes)
+    if text is None or text == "":
+        xray = XRayService().analyze(file_bytes)
+        return xray
+    
+    #entities = assemble_report(text)
+    # return {
+    #     "text": text,
+    #     "entities": entities
+    # }

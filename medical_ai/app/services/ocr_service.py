@@ -36,13 +36,13 @@ class OCRService:
         except ImportError:
             logger.warning("PaddleOCR not available, falling back to Tesseract")
 
-    async def extract_text(self, file: UploadFile = File(...)) -> str:
+    async def extract_text(self, file: UploadFile, file_bytes:bytes) -> str:
         """Main entry point. Returns extracted text string."""
 
         if file.content_type not in ["image/jpeg", "image/png", "application/pdf"]:
             raise HTTPException(status_code=400, detail="Unsupported file type")
 
-        file_bytes = await file.read()
+        # file_bytes = await file.read()
         loop = asyncio.get_event_loop()
 
         if file.content_type == "application/pdf":
@@ -68,6 +68,11 @@ class OCRService:
             try:
                 img_array = np.array(processed_image)
                 result = self._paddle_ocr.ocr(img_array, cls=True)
+
+                if not result or result[0] is None or len(result[0]) == 0:
+                    logger.warning("PaddleOCR returned no text boxes — image may be blank or unreadable")
+                    return ""
+
                 # SORT HERE
                 sorted_rows = self.sort_ocr_results(result[0], line_threshold=30)
                 # formatted_text = []
