@@ -5,14 +5,14 @@ import os
 
 from fastapi import FastAPI, File, UploadFile
 from services.ocr_service import OCRService;
-from services.report_assembler import assemble_report;
+from services.report_assembler import assemble_report
 from models.schemas import MedicalNERResponse
 from models.schemas import MedicalEntityOut
 from services.xray_report import XRayService
 from services.classifier import classify
+from services.assembler import assemble_report
+from services.llm_extractor import split_by_category,extract_multi_section,extract_report
 app = FastAPI()
-
-from paddleocr import PaddleOCR
 
 
 @app.get("/")
@@ -26,15 +26,14 @@ async def extract_medical(file: UploadFile = File(...)):
 
     file_bytes = await file.read()
     text = await OCRService().extract_text(file,file_bytes)
-    if text is None or text == "":
-        xray = XRayService().analyze(file_bytes)
-        return xray    
+    # if text is None or text == "":
+    #     xray = XRayService().analyze(file_bytes)
+    #     return xray    
     
-    classification = classify(text)
+    assembler = assemble_report(text)
+    # split_category = split_by_category(text)
 
-    return {
-        "classification" : classification
-    }
+    return assembler
     #entities = assemble_report(text)
     # return {
     #     "text": text,

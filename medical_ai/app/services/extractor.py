@@ -1,44 +1,64 @@
 """
-Medical NER - Clean Lab Result Extractor
-Output format: { test, value, unit, status }
-Status: NORMAL | HIGH | LOW | CRITICAL_HIGH | CRITICAL_LOW | UNKNOWN
+extractor.py  ─  Unified Medical Report Extractor
+══════════════════════════════════════════════════
+Category → extractor routing:
+  LAB            → regex pipeline (always deterministic, zero API cost)
+                   + LLM second-pass to fill missed tests
+  IMAGING        → extract_report() via LLM  |  keyword fallback
+  CLINICAL       → extract_report() via LLM  |  keyword fallback
+  SPECIALIST     → extract_report() via LLM  |  keyword fallback
+  PATHOLOGY      → extract_report() via LLM  |  keyword fallback
+  ADMINISTRATIVE → extract_report() via LLM  |  keyword fallback
 
-Key improvements over v1:
-  - Metadata/header lines stripped before parsing (no more address/phone false positives)
-  - Each known test has explicit normal ranges (gender-aware)
-  - LAB_PATTERN anchored to known test names only — no greedy false matches
-  - Status computed by comparing value to range
-  - spaCy hook preserved for conditions (diseases/medications)
+Single unified entry point:
+    results = extract(text, category, sub_type, gender)
+
+LAB result shape (unchanged):
+    { result_type, test, value, unit, status }
+
+Non-LAB result shape (new — one report dict per document):
+    {
+        result_type, sub_type,
+        summary, findings, impressions, advice,
+        raw_text, metadata: { gender, confidence }
+    }
+
+Backward compatibility:
+    extract_lab_results(text, gender, as_entities)  ← unchanged
+    extract_conditions(text)                         ← unchanged
 """
+
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass, asdict
+from typing import Optional
+
+from services.known_tests    import KNOWN_TESTS
+from services.llm_extractor  import extract_report, extract_lab_values  # extract_lab_values is compat shim
 
 
-# ─── Output Model ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1 - DATA MODELS
+# ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class MedicalEntity:
-    """
-    Backward-compatible shape for existing API endpoints that use MedicalEntityOut.
-    Maps the new { test, value, unit, status } fields to the old schema.
-    """
-    text: str           # test name  → was: matched text span
-    entity_type: str    # always "LAB_VALUE"
-    severity: str       # maps status → CRITICAL | MODERATE | MILD | INFO
-    explanation: str    # human-readable status sentence
-    value: str          # numeric value as string
-    unit: str
+    text:        str
+    entity_type: str
+    severity:    str
+    explanation: str
+    value:       str
+    unit:        str
 
 
 @dataclass
 class LabResult:
-    test: str           # Human-readable test name
-    value: float        # Numeric value
-    unit: str           # e.g. g/dL, %, x10^9/L
-    status: str         # NORMAL | HIGH | LOW | CRITICAL_HIGH | CRITICAL_LOW
+    test:   str
+    value:  float
+    unit:   str
+    status: str
 
-    # ── status → severity mapping ──────────────────────────────────────────
     _STATUS_TO_SEVERITY = {
         "CRITICAL_HIGH": "CRITICAL",
         "CRITICAL_LOW":  "CRITICAL",
@@ -48,440 +68,125 @@ class LabResult:
     }
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return {"result_type": "LAB", **asdict(self)}
 
     def to_entity(self) -> MedicalEntity:
-        """
-        Convert to the MedicalEntity shape expected by existing endpoint code:
-
-            MedicalEntityOut(
-                text=e.text,
-                entity_type=e.entity_type,
-                severity=e.severity,
-                explanation=e.explanation,
-                value=e.value,
-                unit=e.unit,
-            )
-        """
-        severity = self._STATUS_TO_SEVERITY.get(self.status, "INFO")
-        explanation = f"{self.test} is {self.status.replace('_', ' ').lower()} ({self.value} {self.unit})".strip()
+        severity    = self._STATUS_TO_SEVERITY.get(self.status, "INFO")
+        explanation = (
+            f"{self.test} is {self.status.replace('_', ' ').lower()}"
+            f" ({self.value} {self.unit})"
+        ).strip()
         return MedicalEntity(
-            text=self.test,
-            entity_type="LAB_VALUE",
-            severity=severity,
-            explanation=explanation,
-            value=str(self.value),
-            unit=self.unit,
+            text=self.test, entity_type="LAB_VALUE",
+            severity=severity, explanation=explanation,
+            value=str(self.value), unit=self.unit,
         )
 
 
-# ─── Known Test Registry ──────────────────────────────────────────────────────
-# Format:
-#   "MATCH_KEY": {
-#       "name":     display name,
-#       "unit":     fallback unit if report doesn't include one,
-#       "male":     (low, high),
-#       "female":   (low, high),
-#       "critical": (critical_low, critical_high)  — None means no threshold
-#   }
-
-KNOWN_TESTS = {
-
-    # ── Complete Blood Count ──────────────────────────────────────────────────
-    "HAEMOGLOBIN": {
-        "name": "Haemoglobin", "unit": "g/dL",
-        "male": (14.0, 18.0), "female": (12.0, 16.0),
-        "critical": (7.0, 20.0),
-    },
-    "HEMOGLOBIN": {
-        "name": "Haemoglobin", "unit": "g/dL",
-        "male": (14.0, 18.0), "female": (12.0, 16.0),
-        "critical": (7.0, 20.0),
-    },
-    "HB": {
-        "name": "Haemoglobin", "unit": "g/dL",
-        "male": (14.0, 18.0), "female": (12.0, 16.0),
-        "critical": (7.0, 20.0),
-    },
-    "WBC": {
-        "name": "WBC (Total)", "unit": "x10^9/L",
-        "male": (4.0, 11.0), "female": (4.0, 11.0),
-        "critical": (2.0, 30.0),
-    },
-    "RBC": {
-        "name": "RBC", "unit": "x10^12/L",
-        "male": (4.5, 5.5), "female": (3.8, 5.0),
-        "critical": (2.0, 7.0),
-    },
-    "PLATELETS": {
-        "name": "Platelets", "unit": "x10^9/L",
-        "male": (150.0, 400.0), "female": (150.0, 400.0),
-        "critical": (50.0, 1000.0),
-    },
-    "PLT": {
-        "name": "Platelets", "unit": "x10^9/L",
-        "male": (150.0, 400.0), "female": (150.0, 400.0),
-        "critical": (50.0, 1000.0),
-    },
-    "HCT": {
-        "name": "HCT/PCV", "unit": "%",
-        "male": (40.0, 54.0), "female": (37.0, 47.0),
-        "critical": (20.0, 60.0),
-    },
-    "PCV": {
-        "name": "HCT/PCV", "unit": "%",
-        "male": (40.0, 54.0), "female": (37.0, 47.0),
-        "critical": (20.0, 60.0),
-    },
-    "HCT/PCV": {
-        "name": "HCT/PCV", "unit": "%",
-        "male": (40.0, 54.0), "female": (37.0, 47.0),
-        "critical": (20.0, 60.0),
-    },
-    "MCV": {
-        "name": "MCV", "unit": "fL",
-        "male": (83.0, 101.0), "female": (83.0, 101.0),
-        "critical": None,
-    },
-    "MCH": {
-        "name": "MCH", "unit": "pg",
-        "male": (27.0, 32.0), "female": (27.0, 32.0),
-        "critical": None,
-    },
-    "MCHC": {
-        "name": "MCHC", "unit": "g/dL",
-        "male": (31.5, 34.5), "female": (31.5, 34.5),
-        "critical": (20.0, 40.0),
-    },
-    "RDW-CV": {
-        "name": "RDW-CV", "unit": "%",
-        "male": (11.6, 14.0), "female": (11.6, 14.0),
-        "critical": None,
-    },
-    "RDW-SD": {
-        "name": "RDW-SD", "unit": "fL",
-        "male": (39.0, 46.0), "female": (39.0, 46.0),
-        "critical": None,
-    },
-    "MPV": {
-        "name": "MPV", "unit": "fL",
-        "male": (7.4, 10.4), "female": (7.4, 10.4),
-        "critical": None,
-    },
-    "PCT": {
-        "name": "PCT", "unit": "%",
-        "male": (0.20, 0.50), "female": (0.20, 0.50),
-        "critical": None,
-    },
-    "PDW": {
-        "name": "PDW", "unit": "%",
-        "male": (10.0, 18.0), "female": (10.0, 18.0),
-        "critical": None,
-    },
-
-    # ── Differential WBC ─────────────────────────────────────────────────────
-    "NEUTROPHILS": {
-        "name": "Neutrophils", "unit": "%",
-        "male": (40.0, 70.0), "female": (40.0, 70.0),
-        "critical": None,
-    },
-    "LYMPHOCYTES": {
-        "name": "Lymphocytes", "unit": "%",
-        "male": (20.0, 46.0), "female": (20.0, 46.0),
-        "critical": None,
-    },
-    "MONOCYTES": {
-        "name": "Monocytes", "unit": "%",
-        "male": (2.0, 8.0), "female": (2.0, 8.0),
-        "critical": None,
-    },
-    "EOSINOPHILS": {
-        "name": "Eosinophils", "unit": "%",
-        "male": (1.0, 6.0), "female": (1.0, 6.0),
-        "critical": None,
-    },
-    "BASOPHILS": {
-        "name": "Basophils", "unit": "%",
-        "male": (0.0, 1.0), "female": (0.0, 1.0),
-        "critical": None,
-    },
-
-    # ── Inflammatory Markers ──────────────────────────────────────────────────
-    "ESR": {
-        "name": "ESR", "unit": "mm/hr",
-        "male": (0.0, 10.0), "female": (0.0, 20.0),
-        "critical": None,
-    },
-    "CRP": {
-        "name": "CRP", "unit": "mg/L",
-        "male": (0.0, 10.0), "female": (0.0, 10.0),
-        "critical": (None, 100.0),
-    },
-
-    # ── Metabolic ────────────────────────────────────────────────────────────
-    "GLUCOSE": {
-        "name": "Glucose (Fasting)", "unit": "mg/dL",
-        "male": (70.0, 100.0), "female": (70.0, 100.0),
-        "critical": (40.0, 500.0),
-    },
-    "FBS": {
-        "name": "Fasting Blood Sugar", "unit": "mg/dL",
-        "male": (70.0, 100.0), "female": (70.0, 100.0),
-        "critical": (40.0, 500.0),
-    },
-    "HBA1C": {
-        "name": "HbA1c", "unit": "%",
-        "male": (4.0, 5.7), "female": (4.0, 5.7),
-        "critical": (None, 10.0),
-    },
-    "CREATININE": {
-        "name": "Creatinine", "unit": "mg/dL",
-        "male": (0.7, 1.2), "female": (0.5, 1.0),
-        "critical": (None, 10.0),
-    },
-    "UREA": {
-        "name": "Blood Urea", "unit": "mg/dL",
-        "male": (15.0, 45.0), "female": (15.0, 45.0),
-        "critical": (None, 200.0),
-    },
-    "BUN": {
-        "name": "BUN", "unit": "mg/dL",
-        "male": (7.0, 20.0), "female": (7.0, 20.0),
-        "critical": (None, 100.0),
-    },
-    "CHOLESTEROL": {
-        "name": "Total Cholesterol", "unit": "mg/dL",
-        "male": (0.0, 200.0), "female": (0.0, 200.0),
-        "critical": (None, 300.0),
-    },
-    "LDL": {
-        "name": "LDL Cholesterol", "unit": "mg/dL",
-        "male": (0.0, 100.0), "female": (0.0, 100.0),
-        "critical": None,
-    },
-    "HDL": {
-        "name": "HDL Cholesterol", "unit": "mg/dL",
-        "male": (40.0, 999.0), "female": (50.0, 999.0),
-        "critical": None,
-    },
-    "TRIGLYCERIDES": {
-        "name": "Triglycerides", "unit": "mg/dL",
-        "male": (0.0, 150.0), "female": (0.0, 150.0),
-        "critical": None,
-    },
-
-    # ── Liver ────────────────────────────────────────────────────────────────
-    "ALT": {
-        "name": "ALT", "unit": "U/L",
-        "male": (7.0, 56.0), "female": (7.0, 45.0),
-        "critical": (None, 1000.0),
-    },
-    "AST": {
-        "name": "AST", "unit": "U/L",
-        "male": (10.0, 40.0), "female": (10.0, 35.0),
-        "critical": (None, 1000.0),
-    },
-    "ALP": {
-        "name": "ALP", "unit": "U/L",
-        "male": (44.0, 147.0), "female": (44.0, 147.0),
-        "critical": None,
-    },
-    "BILIRUBIN": {
-        "name": "Total Bilirubin", "unit": "mg/dL",
-        "male": (0.2, 1.2), "female": (0.2, 1.2),
-        "critical": (None, 15.0),
-    },
-
-    # ── Thyroid ──────────────────────────────────────────────────────────────
-    "TSH": {
-        "name": "TSH", "unit": "mIU/L",
-        "male": (0.4, 4.0), "female": (0.4, 4.0),
-        "critical": (0.1, 10.0),
-    },
-
-    # ── Electrolytes ─────────────────────────────────────────────────────────
-    "SODIUM": {
-        "name": "Sodium (Na)", "unit": "mEq/L",
-        "male": (136.0, 145.0), "female": (136.0, 145.0),
-        "critical": (120.0, 160.0),
-    },
-    "POTASSIUM": {
-        "name": "Potassium (K)", "unit": "mEq/L",
-        "male": (3.5, 5.0), "female": (3.5, 5.0),
-        "critical": (2.5, 6.5),
-    },
-    "CALCIUM": {
-        "name": "Calcium", "unit": "mg/dL",
-        "male": (8.5, 10.5), "female": (8.5, 10.5),
-        "critical": (6.0, 13.0),
-    },
-
-    # ── Clotting ─────────────────────────────────────────────────────────────
-    "INR": {
-        "name": "INR", "unit": "",
-        "male": (0.8, 1.2), "female": (0.8, 1.2),
-        "critical": (None, 5.0),
-    },
-    "PT": {
-        "name": "Prothrombin Time", "unit": "sec",
-        "male": (11.0, 13.5), "female": (11.0, 13.5),
-        "critical": None,
-    },
-
-    # ── Vitals / Other ───────────────────────────────────────────────────────
-    "SPO2": {
-        "name": "SpO2", "unit": "%",
-        "male": (95.0, 100.0), "female": (95.0, 100.0),
-        "critical": (88.0, None),
-    },
-    "BMI": {
-        "name": "BMI", "unit": "kg/m²",
-        "male": (18.5, 24.9), "female": (18.5, 24.9),
-        "critical": None,
-    },
-}
-
-
-# ─── Noise token cleaner ─────────────────────────────────────────────────────
-# Strips header/metadata TOKENS in-place. Works on single-line OCR output.
-# Does NOT drop whole lines (that's what broke things before).
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 - LAB PIPELINE  (regex — unchanged)
+# ══════════════════════════════════════════════════════════════════════════════
 
 _NOISE_SUB = [
     re.compile(p, re.IGNORECASE) for p in [
-        r'[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}',   # emails
-        r'https?://\S+',                                  # URLs
-        r'www\.\S+',                                      # bare URLs
-        r'helpline[\d,\s:]+',                         # Helpline:10652...
-        r'web\s*:\s*\S+',                               # Web:www...
-        r'e-?mail\s*:\s*\S+',                           # E-mail:...
-        r'inv\.?\s*no\s*:\s*[\w\-]+',                   # Inv.No:2307-22003
-        r'patient\s*(id|ms)\s*[:\.]?\s*[\w.\-]+',       # Patient Id / PatientMS
-        r'collection\s*date\s*:\s*[\w:/]+',             # CollectionDate:16/07/23...
-        r'refd?\s*by\s*\w+\.\s*\w+\.\s*\w+[^%\d]*?(?=[A-Z]{2,}|\Z)',  # Refd by Prof...Surgeon
-        r'(mbbs|ms\(ortho\)|frcs|fcps|hand\s*&\s*micro\s+surgeon)',
-        r'specimen\s*:\s*\w+',
-        r'type\s*:\s*\w+',
-        r'out\s+door',
-        r'printed?\s*on\s*:\s*[\w\-:]+',
-        r'haematology|hematology',
-        r'analysis\s+report',
-        r'differential\s+count\s+of\s+\w+',
-        r'total\s+count\s+\w+\s+count\s+of\s+\w+',   # "Total Count Joal Countof WBC"
-        r'test\s+name|normal\s+range',
-        r'centre\s+ltd',
-        r'diagnostic\s+unit',
-        r'(dhanmondi|dhaka)',
-        r'r/a',
-        r'(autoanalyzer|autoanalyser)\s+method',
-        # Inline gender reference ranges glued to values: "Male14.00-18.00Female12.00"
-        r'(male|female|child|adult|aduit|wome|men|mae|adu|adut|mmin|mmn|sth|sthr)[\d\s\-.,()x^/:%a-z]*',
-        # Standalone numeric ranges: "4.0-11.0" "150.0-400.0" "83-101"
-        r'(?<!\d)\d+\.?\d*\s*[-–]\s*\d+\.?\d*(?!\d)',
-        r'\[\w+\]',                      # [HN20230700010425]
-        r'IG%|NRBC%?',           # IG% NRBC% — not in our registry
-        r'\d{5,}',                   # long standalone number strings
-        r'\(fi\)|\(blood\)',             # (fi) (Blood) OCR artifacts
+        r'[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}',
+        r'https?://\S+',
+        r'www\.\S+',
+        r'helpline[\d,\s:]+',
+        r'web\s*:\s*\S+',
+        r'e-?mail\s*:\s*\S+',
+        r'inv\.?\s*no\s*:\s*[\w\-]+',
+        r'patient\s*(id|ms)\s*[:\.]?\s*[\w.\-]+',
+        r'collection\s*date\s*:\s*[\w:/]+',
+        r'refd?\s*by\s*\w+\.\s*\w+\.\s*\w+[^%\d]*?(?=[A-Z]{2,}|\Z)',
+        r'(mbbs|ms\(ortho\)|frcs|fcps|hand\s*&\s*micro\s+surgeon)',
+        r'specimen\s*:\s*\w+',
+        r'type\s*:\s*\w+',
+        r'out\s+door',
+        r'printed?\s*on\s*:\s*[\w\-:]+',
+        r'haematology|hematology',
+        r'analysis\s+report',
+        r'differential\s+count\s+of\s+\w+',
+        r'total\s+count\s+\w+\s+count\s+of\s+\w+',
+        r'test\s+name|normal\s+range',
+        r'centre\s+ltd',
+        r'diagnostic\s+unit',
+        r'(dhanmondi|dhaka)',
+        r'r/a',
+        r'(autoanalyzer|autoanalyser)\s+method',
+        r'(male|female|child|adult|aduit|wome|men|mae|adu|adut|mmin|mmn|sth|sthr)[\d\s\-.,()x^/:%a-z]*',
+        r'(?<!\d)\d+\.?\d*\s*[-]\s*\d+\.?\d*(?!\d)',
+        r'\[\w+\]',
+        r'IG%|NRBC%?',
+        r'\d{5,}',
+        r'\(fi\)|\(blood\)',
     ]
 ]
 
-# OCR commonly misspells test names — normalize before matching
 _OCR_FIXES = [
-    # Fuzzy OCR misspelling fixes - run BEFORE noise removal
-    (re.compile(r'\bLymphocyi[eo]s\b',      re.IGNORECASE), 'Lymphocytes'),
-    (re.compile(r'\bMonocyi[eo]s\b',         re.IGNORECASE), 'Monocytes'),
-    (re.compile(r'\bEosinophil[ily]+s?\b',   re.IGNORECASE), 'Eosinophils'),
-    (re.compile(r'\bPlatlets\b',              re.IGNORECASE), 'Platelets'),
-    (re.compile(r'\bRBC\s*\(Blood\)',         re.IGNORECASE), 'RBC'),
-    (re.compile(r'\bHCT\s*/\s*PCV\b',        re.IGNORECASE), 'HCT/PCV'),
-    (re.compile(r'\bRDW-SD\s*\(\w*\)',       re.IGNORECASE), 'RDW-SD'),
-    (re.compile(r'\bRDW-CV\s*\([^)]*\)',      re.IGNORECASE), 'RDW-CV'),
+    (re.compile(r'\bLymphocyi[eo]s\b',     re.IGNORECASE), 'Lymphocytes'),
+    (re.compile(r'\bMonocyi[eo]s\b',        re.IGNORECASE), 'Monocytes'),
+    (re.compile(r'\bEosinophil[ily]+s?\b',  re.IGNORECASE), 'Eosinophils'),
+    (re.compile(r'\bPlatlets\b',            re.IGNORECASE), 'Platelets'),
+    (re.compile(r'\bRBC\s*\(Blood\)',       re.IGNORECASE), 'RBC'),
+    (re.compile(r'\bHCT\s*/\s*PCV\b',      re.IGNORECASE), 'HCT/PCV'),
+    (re.compile(r'\bRDW-SD\s*\(\w*\)',     re.IGNORECASE), 'RDW-SD'),
+    (re.compile(r'\bRDW-CV\s*\([^)]*\)',   re.IGNORECASE), 'RDW-CV'),
 ]
 
 
 def clean_text(raw: str) -> str:
-    """
-    Normalize OCR typos then strip noise tokens.
-    Safe for single-line concatenated OCR output.
-    """
     text = raw
-    # 1. Fix OCR misspellings first
     for pattern, replacement in _OCR_FIXES:
         text = pattern.sub(replacement, text)
-    # 2. Remove noise tokens
     for pattern in _NOISE_SUB:
         text = pattern.sub(' ', text)
-    # 3. Collapse whitespace
-    text = re.sub(r'\s{2,}', ' ', text).strip()
-    return text
+    return re.sub(r'\s{2,}', ' ', text).strip()
 
-
-# ─── Status computation ───────────────────────────────────────────────────────
 
 def compute_status(value: float, config: dict, gender: str = "unknown") -> str:
     g = gender.lower()
     low, high = config.get(g if g in ("male", "female") else "female", (None, None))
-    critical = config.get("critical")
-
+    critical  = config.get("critical")
     if critical:
         crit_low, crit_high = critical
-        if crit_low is not None and value < crit_low:
-            return "CRITICAL_LOW"
-        if crit_high is not None and value > crit_high:
-            return "CRITICAL_HIGH"
-
-    if low is not None and value < low:
-        return "LOW"
-    if high is not None and value > high:
-        return "HIGH"
-
+        if crit_low  is not None and value < crit_low:  return "CRITICAL_LOW"
+        if crit_high is not None and value > crit_high: return "CRITICAL_HIGH"
+    if low  is not None and value < low:  return "LOW"
+    if high is not None and value > high: return "HIGH"
     return "NORMAL"
 
-
-# ─── Compiled matcher ─────────────────────────────────────────────────────────
-# Keys sorted longest-first so multi-word keys (e.g. HCT/PCV) match before substrings.
 
 _KEYS_SORTED = sorted(KNOWN_TESTS.keys(), key=len, reverse=True)
 _TEST_RE = re.compile(
     r'\b(' + '|'.join(re.escape(k) for k in _KEYS_SORTED) + r')\b'
-    # Skip noise between test name and value: spaces, parens, brackets, colons, slashes
-    # Also skip full words-in-parens like '(Autoanalyzer Method)' or '(%)'
-    r'(?:\s*\([^)]*\))?'   # optional (anything) block e.g. (Autoanalyzer Method)
+    r'(?:\s*\([^)]*\))?'
     r'[\s:/\-]*'
     r'([\d]+(?:[.,]\d+)?)'
     r'\s*'
-    r'(g/dL|gm/dl|mg/dL|mmol/L|mEq/L|U/L|IU/L|fL|pg|%|mm/hr|mIU/L|sec|x10\^9/L|x10\^12/L|kg/m²)?',
-    re.IGNORECASE
+    r'(g/dL|gm/dl|mg/dL|mmol/L|mEq/L|U/L|IU/L|fL|pg|%|mm/hr|mIU/L|sec'
+    r'|x10\^9/L|x10\^12/L|kg/m2|nmol/L|pmol/L|ng/mL|ng/dL|ng/L'
+    r'|ug/dL|ug/mL|uIU/mL|umol/L|IU/mL|mmHg|bpm|breaths/min|cells/uL)?',
+    re.IGNORECASE,
 )
 
-
-# ─── Public API ───────────────────────────────────────────────────────────────
 
 def extract_lab_results(
     text: str,
     gender: str = "unknown",
     as_entities: bool = False,
-) -> list[dict] | list[MedicalEntity]:
+) -> list:
     """
-    Parse raw report text and return structured lab results.
-
-    Args:
-        text:        Raw OCR or copy-pasted report text
-        gender:      "male" | "female" | "unknown"
-        as_entities: If True, return list[MedicalEntity] compatible with
-                     existing endpoint code that uses MedicalEntityOut.
-                     If False (default), return list[dict] with clean
-                     { test, value, unit, status } shape.
-
-    Endpoint usage (no changes needed in your route):
-        entities = extract_lab_results(text, gender=gender, as_entities=True)
+    Regex pipeline for LAB reports. Signature unchanged.
+    Returns list[dict] or list[MedicalEntity] (as_entities=True).
     """
     cleaned = clean_text(text)
-    results: list[LabResult] = []
+    results = []
     seen: set[str] = set()
 
     for match in _TEST_RE.finditer(cleaned):
-        key = match.group(1).upper().strip()
-        raw_value = match.group(2).replace(",", ".")
+        key          = match.group(1).upper().strip()
+        raw_value    = match.group(2).replace(",", ".")
         matched_unit = match.group(3) or ""
 
         if key in seen:
@@ -497,22 +202,116 @@ def extract_lab_results(
         except ValueError:
             continue
 
-        unit = matched_unit or config.get("unit", "")
+        unit   = matched_unit or config.get("unit", "")
         status = compute_status(value, config, gender)
-
-        results.append(LabResult(
-            test=config["name"],
-            value=value,
-            unit=unit,
-            status=status,
-        ))
+        results.append(LabResult(test=config["name"], value=value, unit=unit, status=status))
 
     if as_entities:
         return [r.to_entity() for r in results]
     return [r.to_dict() for r in results]
 
 
-# ─── spaCy condition extraction (optional, unchanged hook) ────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 - KEYWORD FALLBACKS  (used only when LLM is unavailable)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SEVERITY_WORDS: dict[str, list[str]] = {
+    "SEVERE":   ["severe", "significant", "extensive", "frank", "marked",
+                 "complete", "total", "advanced", "critical", "massive",
+                 "gross", "profound", "high-grade", "poorly differentiated"],
+    "MODERATE": ["moderate", "partial", "compromised", "incomplete",
+                 "localised", "localized", "limited", "reduced",
+                 "bilateral", "multifocal", "moderately differentiated"],
+    "MILD":     ["mild", "minimal", "slight", "early", "minor", "small",
+                 "subtle", "trace", "widening", "borderline", "low-grade",
+                 "well differentiated"],
+}
+
+_NEGATION_PHRASES = [
+    "no ", "not ", "none ", "without ", "absence of", "free of",
+    "not present", "not within", "outside the field", "not in the field",
+    "not identified", "not visualis", "not visualiz",
+    "unremarkable", "within normal", "no evidence", "no abnormal",
+    "no acute", "no active",
+]
+
+
+def _detect_severity(text: str) -> Optional[str]:
+    t = text.lower()
+    for level, words in _SEVERITY_WORDS.items():
+        if any(w in t for w in words):
+            return level
+    return None
+
+
+def _is_negated(text: str) -> bool:
+    return any(p in text.lower() for p in _NEGATION_PHRASES)
+
+
+def _split_sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 10]
+
+
+def _sentences_with(text: str, keywords: list[str]) -> list[str]:
+    return [s for s in _split_sentences(text) if any(kw.lower() in s.lower() for kw in keywords)]
+
+
+def _keyword_extract(text: str, report_type: str, sub_type: str, gender: str = "unknown") -> dict:
+    """
+    Minimal keyword fallback when LLM is unavailable.
+    Returns the same shape as extract_report() (tests_analysis format).
+    Each sentence that looks like a finding becomes a bare tests_analysis entry.
+    """
+    import logging
+    logging.getLogger(__name__).warning(
+        "LLM unavailable for %s/%s — using keyword fallback", report_type, sub_type
+    )
+
+    _GENERAL_KEYWORDS = [
+        "finding", "noted", "revealed", "evident", "present", "identified",
+        "consolidation", "opacity", "fracture", "effusion", "impression",
+        "diagnosis", "complaint", "examination", "medication", "prescribed",
+    ]
+
+    finding_sentences = list(dict.fromkeys(
+        s for s in _split_sentences(text)
+        if any(kw in s.lower() for kw in _GENERAL_KEYWORDS)
+    ))
+
+    # Wrap each sentence as a bare tests_analysis entry
+    tests_analysis = [
+        {
+            "test_name":           f"Finding {i+1}",
+            "value":               "",
+            "unit":                "",
+            "reference_range":     "",
+            "status":              "Unknown",
+            "keyword_explanation": "",
+            "result_explanation":  sentence,
+        }
+        for i, sentence in enumerate(finding_sentences)
+    ]
+
+    advice_sentences = [
+        s for s in _split_sentences(text)
+        if any(w in s.lower() for w in ["recommend", "follow up", "follow-up", "refer", "advised"])
+    ]
+
+    return {
+        "report_type":    report_type,
+        "sub_type":       sub_type,
+        "summary":        "",
+        "tests_analysis": tests_analysis,
+        "risk_level":     "Unknown",
+        "advice":         " ".join(advice_sentences),
+        "raw_text":       text,
+        "metadata":       {"gender": gender, "confidence": "LOW"},
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4 - CONDITIONS EXTRACTOR  (unchanged public API)
+# ══════════════════════════════════════════════════════════════════════════════
 
 def load_spacy_model():
     try:
@@ -541,17 +340,15 @@ MODERATE_TERMS = {
 
 def _condition_severity(term: str) -> str:
     t = term.lower()
-    if any(c in t for c in CRITICAL_TERMS):
-        return "CRITICAL"
-    if any(m in t for m in MODERATE_TERMS):
-        return "MODERATE"
+    if any(c in t for c in CRITICAL_TERMS):  return "CRITICAL"
+    if any(m in t for m in MODERATE_TERMS):  return "MODERATE"
     return "INFO"
 
 
 def extract_conditions(text: str) -> list[dict]:
     """
-    Detect named medical conditions.
-    Returns: list of { condition, severity }
+    Detect named medical conditions via spaCy NER or keyword scan.
+    Returns: list of { condition, severity }. Signature unchanged.
     """
     found, seen = [], set()
 
@@ -562,12 +359,68 @@ def extract_conditions(text: str) -> list[dict]:
                 if name not in seen:
                     seen.add(name)
                     found.append({"condition": ent.text.title(),
-                                  "severity": _condition_severity(ent.text)})
+                                  "severity":  _condition_severity(ent.text)})
     else:
         for cond in CRITICAL_TERMS | MODERATE_TERMS:
             if re.search(r'\b' + re.escape(cond) + r'\b', text, re.IGNORECASE):
                 if cond not in seen:
                     seen.add(cond)
                     found.append({"condition": cond.title(),
-                                  "severity": _condition_severity(cond)})
+                                  "severity":  _condition_severity(cond)})
     return found
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 5 - UNIFIED DISPATCHER
+#
+# LAB   → regex always  +  LLM second-pass for missed tests
+# Other → extract_report() (LLM)  |  _keyword_extract() fallback
+# ══════════════════════════════════════════════════════════════════════════════
+
+def extract(
+    text:     str,
+    category: str,
+    sub_type: str = "UNKNOWN",
+    gender:   str = "unknown",
+) -> dict | list[dict]:
+    """
+    Unified entry point called by report_assembler.py.
+
+    Returns:
+      LAB     → list[dict]  each { result_type, test, value, unit, status }
+      Non-LAB → dict        { report_type, sub_type, summary, findings,
+                              impressions, advice, raw_text, metadata }
+
+    The assembler handles both shapes — it stores lab_values separately
+    and report info in the "report" key.
+    """
+    primary = category.split(" + ")[0].strip().upper()
+
+    # ── LAB: regex pipeline + LLM second-pass ────────────────────────────────
+    if primary == "LAB":
+        regex_hits  = extract_lab_results(text, gender=gender)
+        found_names = [r["test"] for r in regex_hits if "test" in r]
+        llm_hits    = extract_lab_values(text, already_extracted=found_names, gender=gender)
+        return regex_hits + llm_hits
+
+    # ── UNKNOWN ───────────────────────────────────────────────────────────────
+    if primary == "UNKNOWN":
+        return {
+            "report_type": "UNKNOWN",
+            "sub_type":    sub_type,
+            "summary":     "Document category could not be determined.",
+            "findings":    [],
+            "impressions": [],
+            "advice":      [],
+            "raw_text":    text,
+            "metadata":    {"gender": gender, "confidence": "LOW"},
+        }
+
+    # ── Non-LAB: LLM first, keyword fallback if LLM unavailable ──────────────
+    report = extract_report(text, report_type=primary, sub_type=sub_type, gender=gender)
+
+    if report["metadata"]["confidence"] == "LOW":
+        # LLM failed — use keyword fallback but keep raw_text from extract_report
+        return _keyword_extract(text, report_type=primary, sub_type=sub_type, gender=gender)
+
+    return report
