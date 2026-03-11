@@ -1,0 +1,88 @@
+.navbar {
+  padding: 20px 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.navbar-sticky {
+  padding: 16px 32px;
+  position: sticky;
+  top: 0;
+  background: rgba(7,13,26,0.95);
+  backdrop-filter: blur(12px);
+  z-index: 100;
+}
+
+/* LEFT */
+
+.navbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.navbar-left-back {
+  gap: 16px;
+}
+
+/* BACK BUTTON */
+
+.navbar-back-btn {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 8px 14px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.navbar-back-btn:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+/* BRAND */
+
+.navbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.navbar-icon {
+  font-size: 22px;
+}
+
+.navbar-icon-small {
+  font-size: 18px;
+}
+
+.navbar-title {
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+  font-size: 18px;
+  color: #f1f5f9;
+}
+
+.navbar-title-small {
+  font-size: 16px;
+}
+
+.navbar-ai {
+  color: #6366f1;
+}
+
+/* RIGHT */
+
+.navbar-powered {
+  font-size: 12px;
+  color: #475569;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-family: 'Space Mono', monospace;
+}

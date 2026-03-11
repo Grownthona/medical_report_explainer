@@ -1,41 +1,36 @@
-// ── Shared constants ──────────────────────────────────────────────────────────
+export const LANGUAGES = ["English", "বাংলা", "हिंदी", "Arabic", "Spanish", "French", "Portuguese"];
 
-export const ACCEPTED = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-export const MAX_MB = 20;
-
-export const STEPS = [
-  "Reading document structure…",
-  "Extracting test values…",
-  "Mapping reference ranges…",
-  "Generating plain-language report…",
-];
-
-export const LANGUAGES = [
-  { code: "en", label: "English",   flag: "🇺🇸" },
-  { code: "bn", label: "বাংলা",     flag: "🇧🇩" },
-  { code: "ar", label: "العربية",   flag: "🇸🇦" },
-  { code: "hi", label: "हिन्दी",    flag: "🇮🇳" },
-  { code: "fr", label: "Français",  flag: "🇫🇷" },
-  { code: "es", label: "Español",   flag: "🇪🇸" },
-  { code: "zh", label: "中文",       flag: "🇨🇳" },
-  { code: "pt", label: "Português", flag: "🇧🇷" },
-];
-
-export const RISK = {
-  Low:    { color: "#16a34a", bg: "#dcfce7", border: "#bbf7d0", dot: "#22c55e", label: "LOW RISK" },
-  Medium: { color: "#d97706", bg: "#fef3c7", border: "#fde68a", dot: "#f59e0b", label: "MODERATE RISK" },
-  High:   { color: "#dc2626", bg: "#fee2e2", border: "#fecaca", dot: "#ef4444", label: "HIGH RISK" },
+export const STATUS_CONFIG = {
+  Normal:  { color: "#22c55e", bg: "rgba(34,197,94,0.08)",   border: "rgba(34,197,94,0.25)",  label: "Normal"   },
+  High:    { color: "#f97316", bg: "rgba(249,115,22,0.08)",  border: "rgba(249,115,22,0.3)",  label: "High ↑"   },
+  Low:     { color: "#60a5fa", bg: "rgba(96,165,250,0.08)",  border: "rgba(96,165,250,0.3)",  label: "Low ↓"    },
+  Abnormal:{ color: "#f43f5e", bg: "rgba(244,63,94,0.08)",   border: "rgba(244,63,94,0.3)",   label: "Abnormal" },
+  Unknown: { color: "#94a3b8", bg: "rgba(148,163,184,0.08)", border: "rgba(148,163,184,0.2)", label: "Review"   },
 };
 
-export const STATUS = {
-  Normal:   { color: "#15803d", bg: "#f0fdf4", border: "#bbf7d0", icon: "✓" },
-  Abnormal: { color: "#b45309", bg: "#fffbeb", border: "#fde68a", icon: "!" },
-  High:     { color: "#b91c1c", bg: "#fff1f2", border: "#fecdd3", icon: "↑" },
+export const RISK_CONFIG = {
+  Low:    { color: "#22c55e", label: "Low Risk"    },
+  Medium: { color: "#f97316", label: "Medium Risk" },
+  High:   { color: "#f43f5e", label: "High Risk"   },
 };
 
-export const QUICK_PROMPTS = [
-  "What's most concerning?",
-  "Explain the ESR result",
-  "Is this serious?",
-  "What causes back pain?",
+export const TAB_ICONS = { LAB: "🧪", IMAGING: "🩻", REPORT: "📋" };
+
+export const FEATURE_PILLS = [
+  "🤖 AI Explanation",
+  "🔊 Voice Playback",
+  "⚠️ Abnormal Values",
+  "🌐 Multi-language",
 ];
+
+export const GLOBAL_STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pulse  { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  select option { background: #0f172a; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+`;

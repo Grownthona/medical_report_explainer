@@ -12,8 +12,16 @@ from services.xray_report import XRayService
 from services.classifier import classify
 from services.assembler import assemble_report
 from services.llm_extractor import split_by_category,extract_multi_section,extract_report
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # your Vite dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 async def root():

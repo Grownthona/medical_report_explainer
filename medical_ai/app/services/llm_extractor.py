@@ -121,7 +121,7 @@ Return this exact JSON structure:
 
 def _call_llm(system_prompt: str, user_message: str) -> Optional[str]:
     """Call Gemini REST API. Returns raw text response or None on any failure."""
-    api_key = os.getenv("GEMINI_API_KEY", "")
+    api_key = os.getenv("GEMINI_API_KEY", "AIzaSyCYOvEjT6FYiyhNL8Nd9BEtuIHCs29LYdU")
     if not api_key:
         logger.error("GEMINI_API_KEY not set — LLM extraction unavailable")
         return None
