@@ -16,11 +16,11 @@ Single unified entry point:
 LAB result shape (unchanged):
     { result_type, test, value, unit, status }
 
-Non-LAB result shape (new — one report dict per document):
+Non-LAB result shape (one report dict per document):
     {
-        result_type, sub_type,
-        summary, findings, impressions, advice,
+        summary, tests_analysis, risk_level, advice,
         raw_text, metadata: { gender, confidence }
+        # metadata is internal — stripped from final output by assembler
     }
 
 Backward compatibility:
@@ -298,8 +298,6 @@ def _keyword_extract(text: str, report_type: str, sub_type: str, gender: str = "
     ]
 
     return {
-        "report_type":    report_type,
-        "sub_type":       sub_type,
         "summary":        "",
         "tests_analysis": tests_analysis,
         "risk_level":     "Unknown",
@@ -388,11 +386,9 @@ def extract(
 
     Returns:
       LAB     → list[dict]  each { result_type, test, value, unit, status }
-      Non-LAB → dict        { report_type, sub_type, summary, findings,
-                              impressions, advice, raw_text, metadata }
-
-    The assembler handles both shapes — it stores lab_values separately
-    and report info in the "report" key.
+      Non-LAB → dict        { summary, tests_analysis, risk_level, advice,
+                              raw_text, metadata }
+      metadata is internal — assembler strips it before final output.
     """
     primary = category.split(" + ")[0].strip().upper()
 
@@ -406,14 +402,12 @@ def extract(
     # ── UNKNOWN ───────────────────────────────────────────────────────────────
     if primary == "UNKNOWN":
         return {
-            "report_type": "UNKNOWN",
-            "sub_type":    sub_type,
-            "summary":     "Document category could not be determined.",
-            "findings":    [],
-            "impressions": [],
-            "advice":      [],
-            "raw_text":    text,
-            "metadata":    {"gender": gender, "confidence": "LOW"},
+            "summary":        "Document category could not be determined.",
+            "tests_analysis": [],
+            "risk_level":     "Unknown",
+            "advice":         "",
+            "raw_text":       text,
+            "metadata":       {"gender": gender, "confidence": "LOW"},
         }
 
     # ── Non-LAB: LLM first, keyword fallback if LLM unavailable ──────────────

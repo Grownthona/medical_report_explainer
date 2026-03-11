@@ -6,24 +6,24 @@ using a single educational medical explanation prompt.
 
 Output shape (uniform for ALL report types):
     {
-        "report_type":   str,
-        "sub_type":      str,
-        "summary":       str,          # plain-language summary
-        "tests_analysis": [            # one entry per test/finding
+        "summary":          str,
+        "voice_explanation":str,   # spoken-style plain-English paragraph for TTS
+        "tests_analysis": [
             {
                 "test_name":          str,
                 "value":              float | str,
                 "unit":               str,
                 "reference_range":    str,
                 "status":             "Normal" | "High" | "Low" | "Unknown",
-                "keyword_explanation":str,   # what the test is
-                "result_explanation": str,   # what this patient's result means
+                "keyword_explanation":str,
+                "result_explanation": str,
             }
         ],
-        "risk_level":    "Low" | "Medium" | "High",
-        "advice":        str,
-        "raw_text":      str,          # always present for chatbot/RAG
-        "metadata":      { "gender": str, "confidence": "HIGH" | "LOW" }
+        "risk_level":  "Low" | "Medium" | "High" | "Unknown",
+        "advice":      str,
+        "raw_text":    str,
+        "metadata":    { "gender": str, "confidence": "HIGH" | "LOW" }
+        # metadata is internal — stripped from final API output by assembler
     }
 
 Public API:
@@ -47,8 +47,10 @@ from typing import Optional
 
 import urllib.request
 import urllib.error
+from dotenv import load_dotenv
 
-logger = logging.getLogger(__name__)
+load_dotenv() # Load variables from .env file
+
 logger = logging.getLogger(__name__)
 
 # ── Gemini config ─────────────────────────────────────────────────────────────
@@ -96,9 +98,20 @@ STRICT RULES:
 - Only analyze what is explicitly present in the report.
 - Return VALID JSON only. No markdown. No text outside JSON.
 
+VOICE EXPLANATION:
+Also return a "voice_explanation" field — a short spoken-style paragraph (3-5 sentences)
+that can be read aloud to the patient. Rules:
+- Use simple, everyday language (no medical jargon).
+- Mention the overall result (good/mixed/concerning).
+- Name any abnormal values naturally, e.g. "your ESR is a bit high".
+- End with a calm, reassuring next step ("it's a good idea to see your doctor about this").
+- Do NOT say "your report shows" — speak directly: "Your haemoglobin looks good."
+- Do NOT diagnose or prescribe.
+
 Return this exact JSON structure:
 {
   "summary": "Overall simplified explanation of the report in plain language",
+  "voice_explanation": "Your blood test results are mostly normal. Your haemoglobin and platelet counts look good. However, your ESR is a little high, which can sometimes mean there is some inflammation in the body. It is a good idea to follow up with your doctor to discuss this finding.",
   "tests_analysis": [
     {
       "test_name": "Hemoglobin",
@@ -121,7 +134,7 @@ Return this exact JSON structure:
 
 def _call_llm(system_prompt: str, user_message: str) -> Optional[str]:
     """Call Gemini REST API. Returns raw text response or None on any failure."""
-    api_key = os.getenv("GEMINI_API_KEY", "AIzaSyCYOvEjT6FYiyhNL8Nd9BEtuIHCs29LYdU")
+    api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
         logger.error("GEMINI_API_KEY not set — LLM extraction unavailable")
         return None
@@ -172,14 +185,13 @@ def _parse_json(raw: str) -> Optional[dict]:
 def _empty_report(report_type: str, sub_type: str, text: str, gender: str) -> dict:
     """Fallback report when LLM is unavailable."""
     return {
-        "report_type":    report_type,
-        "sub_type":       sub_type,
-        "summary":        "",
-        "tests_analysis": [],
-        "risk_level":     "Unknown",
-        "advice":         "",
-        "raw_text":       text,
-        "metadata":       {"gender": gender, "confidence": "LOW"},
+        "summary":           "",
+        "voice_explanation": "",
+        "tests_analysis":    [],
+        "risk_level":        "Unknown",
+        "advice":            "",
+        "raw_text":          text,
+        "metadata":          {"gender": gender, "confidence": "LOW"},
     }
 
 
@@ -220,14 +232,13 @@ def _normalise_tests(parsed: dict, report_type: str, sub_type: str,
         risk = "Unknown"
 
     return {
-        "report_type":    report_type,
-        "sub_type":       sub_type,
-        "summary":        str(parsed.get("summary", "")).strip(),
-        "tests_analysis": tests,
-        "risk_level":     risk,
-        "advice":         str(parsed.get("advice", "")).strip(),
-        "raw_text":       text,
-        "metadata":       {"gender": gender, "confidence": "HIGH"},
+        "summary":           str(parsed.get("summary",           "")).strip(),
+        "voice_explanation": str(parsed.get("voice_explanation", "")).strip(),
+        "tests_analysis":    tests,
+        "risk_level":        risk,
+        "advice":            str(parsed.get("advice", "")).strip(),
+        "raw_text":          text,
+        "metadata":          {"gender": gender, "confidence": "HIGH"},
     }
 
 
@@ -249,9 +260,8 @@ def extract_report(
 
     Returns:
         {
-            "report_type":    str,
-            "sub_type":       str,
-            "summary":        str,
+            "summary":           str,
+            "voice_explanation": str,   # spoken-style paragraph for TTS/audio
             "tests_analysis": [
                 {
                     "test_name":           str,
@@ -268,6 +278,7 @@ def extract_report(
             "raw_text":    str,
             "metadata":    { "gender": str, "confidence": "HIGH"|"LOW" }
         }
+        Note: metadata is internal — consumed by pipeline, stripped from final output.
     """
     gender_hint  = f" Patient gender: {gender}." if gender != "unknown" else ""
     user_message = (

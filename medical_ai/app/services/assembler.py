@@ -71,10 +71,64 @@ def _compute_summary(lab_values: list[dict]) -> ReportSummary:
         has_critical   = any(r.get("status") in critical for r in lab_values),
     )
 
+def _risk_from_lab_values(lab_values: list[dict]) -> str:
+    """Derive risk level from regex-based statuses (reliable, no hallucination)."""
+    statuses = [r.get("status", "") for r in lab_values]
+    if any(s in ("CRITICAL_HIGH", "CRITICAL_LOW") for s in statuses):
+        return "High"
+    if any(s in ("HIGH", "LOW") for s in statuses):
+        return "Medium"
+    return "Low"
+
+
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _STATUS_MAP = {"Normal": "NORMAL", "High": "HIGH", "Low": "LOW", "Unknown": "UNKNOWN"}
+
+def _merge_status(raw_status: str) -> str:
+    """Normalise UPPERCASE regex statuses to Title-case for unified output."""
+    s = raw_status.upper()
+    if s in ("CRITICAL_HIGH", "HIGH"): return "High"
+    if s in ("CRITICAL_LOW",  "LOW"):  return "Low"
+    if s == "NORMAL":                  return "Normal"
+    return "Unknown"
+
+
+def _build_merged_tests(lab_values: list[dict], llm_report: dict) -> list[dict]:
+    """
+    Merge regex lab_values (accurate numbers) with LLM tests_analysis
+    (explanations, reference_range). Regex wins on value/unit/status.
+    LLM fills reference_range, keyword_explanation, result_explanation.
+    LLM-only tests (missed by regex) are appended at the end.
+    """
+    llm_lookup: dict[str, dict] = {
+        item["test_name"].lower(): item
+        for item in llm_report.get("tests_analysis", [])
+    }
+
+    merged = []
+    for r in lab_values:
+        name    = r.get("test", "")
+        llm_row = llm_lookup.get(name.lower(), {})
+        merged.append({
+            "test_name":           name,
+            "value":               r.get("value", ""),
+            "unit":                r.get("unit", ""),
+            "reference_range":     llm_row.get("reference_range", ""),
+            "status":              _merge_status(r.get("status", "Unknown")),
+            "keyword_explanation": llm_row.get("keyword_explanation", ""),
+            "result_explanation":  llm_row.get("result_explanation", ""),
+        })
+
+    # Append any LLM-found tests the regex missed
+    regex_names = {r.get("test", "").lower() for r in lab_values}
+    for item in llm_report.get("tests_analysis", []):
+        if item["test_name"].lower() not in regex_names:
+            merged.append(item)
+
+    return merged
 
 def _tests_analysis_to_lab_values(tests: list[dict]) -> list[dict]:
     """
@@ -133,7 +187,16 @@ def _collect_lab_values(sections: dict[str, list[dict]]) -> list[dict]:
 
     return out
 
+def _strip_internal_fields(report: dict) -> dict:
+    """
+    Return only the fields that belong in the final "report" key.
+    Drops report_type, sub_type, metadata — those live in document_type/patient.
+    """
+    keep = {"summary", "voice_explanation", "tests_analysis", "risk_level", "advice", "raw_text"}
+    return {k: v for k, v in report.items() if k in keep}
 
+
+_STATUS_MAP = {"Normal": "NORMAL", "High": "HIGH", "Low": "LOW", "Unknown": "UNKNOWN"}
 
 
 
@@ -227,7 +290,7 @@ def assemble_report(raw: str) -> dict:
         # reliable for values/units/status — we merge both sources.
         llm_report = extract_report(raw, report_type="LAB", sub_type=effective_sub,
                                     gender=header.gender)
-        
+        return llm_report
         # Build a lookup from test name → LLM tests_analysis entry
         llm_lookup: dict[str, dict] = {
             item["test_name"].lower(): item
@@ -236,25 +299,27 @@ def assemble_report(raw: str) -> dict:
 
         # Merge: regex gives accurate value/unit/status;
         #        LLM gives reference_range, keyword_explanation, result_explanation
-        def _merge_status(raw_status: str) -> str:
-            s = raw_status.upper()
-            if s == "CRITICAL_HIGH": return "High"
-            if s == "CRITICAL_LOW":  return "Low"
-            return s.capitalize()
 
-        merged_tests = []
-        for r in lab_values:
-            name    = r.get("test", "")
-            llm_row = llm_lookup.get(name.lower(), {})
-            merged_tests.append({
-                "test_name":           name,
-                "value":               r.get("value", ""),
-                "unit":                r.get("unit", ""),
-                "reference_range":     llm_row.get("reference_range", ""),
-                "status":              llm_row.get("status", ""),
-                "keyword_explanation": llm_row.get("keyword_explanation", ""),
-                "result_explanation":  llm_row.get("result_explanation", ""),
-            })
+        merged_tests = _build_merged_tests(lab_values, llm_report)
+        # def _merge_status(raw_status: str) -> str:
+        #     s = raw_status.upper()
+        #     if s == "CRITICAL_HIGH": return "High"
+        #     if s == "CRITICAL_LOW":  return "Low"
+        #     return s.capitalize()
+
+        # merged_tests = []
+        # for r in lab_values:
+        #     name    = r.get("test", "")
+        #     llm_row = llm_lookup.get(name.lower(), {})
+        #     merged_tests.append({
+        #         "test_name":           name,
+        #         "value":               r.get("value", ""),
+        #         "unit":                r.get("unit", ""),
+        #         "reference_range":     llm_row.get("reference_range", ""),
+        #         "status":              llm_row.get("status", ""),
+        #         "keyword_explanation": llm_row.get("keyword_explanation", ""),
+        #         "result_explanation":  llm_row.get("result_explanation", ""),
+        #     })
 
         # For any LLM-found tests not in regex results, append them too
         regex_names = {r.get("test", "").lower() for r in lab_values}
@@ -264,39 +329,50 @@ def assemble_report(raw: str) -> dict:
 
         # Risk level: prefer regex-based status counts (more reliable),
         # fall back to LLM risk_level if no regex results
-        if lab_values:
-            statuses = [r.get("status", "") for r in lab_values]
-            if any(s in ("CRITICAL_HIGH", "CRITICAL_LOW") for s in statuses):
-                risk_level = "High"
-            elif any(s in ("HIGH", "LOW") for s in statuses):
-                risk_level = "Medium"
-            else:
-                risk_level = "Low"
-        else:
-            risk_level = llm_report.get("risk_level", "Unknown")
+        risk_level = (
+            _risk_from_lab_values(lab_values)
+            if lab_values
+            else llm_report.get("risk_level", "Unknown")
+        )
+
 
         report = {
-            "report_type":    "LAB",
-            "sub_type":       effective_sub,
-            "summary":        llm_report.get("summary", ""),
-            "tests_analysis": merged_tests,
-            "risk_level":     risk_level,
-            "advice":         llm_report.get("advice", ""),
-            "raw_text":       raw,
-            "metadata":       {
-                "gender":     header.gender,
-                "confidence": llm_report["metadata"]["confidence"],
-            },
+            # "report_type":    "LAB",
+            # "sub_type":       effective_sub,
+            "summary":           llm_report.get("summary", ""),
+            "voice_explanation": llm_report.get("voice_explanation", ""),
+            "tests_analysis":    merged_tests,
+            "risk_level":        risk_level,
+            "advice":            llm_report.get("advice", ""),
+            "raw_text":          raw,
+            # "metadata":          {
+            #     "gender":          header.gender,
+            #     "confidence":      llm_report["metadata"]["confidence"],
+            # },
         }
     else:
-        report = extracted if isinstance(extracted, dict) else {
-            "report_type": primary, "sub_type": effective_sub,
-            "summary": "", "tests_analysis": [], "risk_level": "Unknown",
-            "advice": "", "raw_text": raw,
-            "metadata": {"gender": header.gender, "confidence": "LOW"},
-        }
 
-    summary = _compute_summary(lab_values)
+        header.report_type = effective_sub
+        raw_report = extracted if isinstance(extracted, dict) else {}
+        report = _strip_internal_fields(raw_report) or {
+            "summary":           "",
+            "voice_explanation": "",
+            "tests_analysis":    [],
+            "risk_level":        "Unknown",
+            "advice":            "",
+            "raw_text":          raw,
+        }
+        # Ensure raw_text is always present
+        report.setdefault("raw_text", raw)
+
+    #     report = extracted if isinstance(extracted, dict) else {
+    #         "report_type": primary, "sub_type": effective_sub,
+    #         "summary": "", "tests_analysis": [], "risk_level": "Unknown",
+    #         "advice": "", "raw_text": raw,
+    #         "metadata": {"gender": header.gender, "confidence": "LOW"},
+    #     }
+
+    # summary = _compute_summary(lab_values)
 
     return {
         "is_mixed":      False,
@@ -309,7 +385,8 @@ def assemble_report(raw: str) -> dict:
         "patient":    header.to_dict(),
         "report":     report,
         "sections":   {},        # empty for single reports
-        "lab_values": lab_values,
-        "conditions": conditions,
-        "summary":    summary.to_dict(),
+        # "lab_values": lab_values,
+        # "conditions": conditions,
+        "summary":    _compute_summary(report.get("tests_analysis", [])).to_dict(),
+
     }
