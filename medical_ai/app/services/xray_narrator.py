@@ -62,7 +62,7 @@ def _build_prompt(predictions: list[dict], language: str) -> tuple[str, str]:
     system_prompt = f"""You are a cautious and educational medical AI specializing in chest X-ray report narration.
 {lang_instruction}
 
-You will receive a list of chest X-ray findings with probability scores from an AI classification model.
+You will receive a list of X-ray findings with probability scores from an AI classification model.
 Your job is to turn these into a clear, patient-friendly explanation.
 
 Return ONLY a valid JSON object with this exact structure:
@@ -85,7 +85,7 @@ STRICT RULES:
         f"  {p['label']}: {p['probability']:.1%}"
         for p in sorted(predictions, key=lambda x: x["probability"], reverse=True)
     )
-    user_message = f"Chest X-ray AI model predictions:\n{rows}"
+    user_message = f"X-ray AI model predictions:\n{rows}"
 
     return system_prompt, user_message
 

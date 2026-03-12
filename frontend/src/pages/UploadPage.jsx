@@ -2,6 +2,7 @@ import { useState } from "react";
 import Navbar from "../components/Navbar";
 import DropZone from "../components/DropZone";
 import { LANGUAGES, FEATURE_PILLS } from "../utils/constants";
+import { MOCK_SAMPLES } from "../data/mockData";
 import "../styles/UploadPage.css";
 
 export default function UploadPage({ onAnalyze }) {
@@ -11,10 +12,19 @@ export default function UploadPage({ onAnalyze }) {
   const [language, setLanguage] = useState("English");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [selectedMock, setSelectedMock] = useState("SINGLE_REPORT_PROPER");
 
   const hasContent = file || pasteText.trim();
 
   const handleAnalyze = async () => {
+    // For testing, we use the selected mock data
+    // setLoading(true);
+    // setTimeout(() => {
+    //   onAnalyze(MOCK_SAMPLES[selectedMock], language);
+    //   setLoading(false);
+    // }, 800);
+
+    
     if (!hasContent || loading) return;
 
     setError(null);
@@ -25,9 +35,10 @@ export default function UploadPage({ onAnalyze }) {
 
       if (tab === "upload" && file) {
         const formData = new FormData();
-        formData.append("file", file);
+        formData.append("files", file);
+        formData.append("language", language);
 
-        const res = await fetch("http://127.0.0.1:8000/extract/text", {
+        const res = await fetch("http://127.0.0.1:8000/extract/file", {
           method: "POST",
           body: formData,
         });
@@ -40,10 +51,13 @@ export default function UploadPage({ onAnalyze }) {
         data = await res.json();
 
       } else {
+        const formData = new FormData();
+        formData.append("text", pasteText);
+        formData.append("language", language);
+
         const res = await fetch("http://127.0.0.1:8000/extract/text", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: pasteText }),
+          body: formData,
         });
 
         if (!res.ok) {
@@ -62,15 +76,14 @@ export default function UploadPage({ onAnalyze }) {
     } finally {
       setLoading(false);
     }
+    
   };
 
   return (
     <div className="upload-page">
-
       <Navbar />
 
       <div className="hero">
-
         <div className="badge">
           ✦ AI-POWERED MEDICAL TRANSLATOR
         </div>
@@ -85,7 +98,29 @@ export default function UploadPage({ onAnalyze }) {
           In Plain Language
         </h1>
 
-        <p className="hero-sub">
+        {/* Mock Selector for Testing
+        <div style={{ marginTop: 20, display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#94a3b8', fontSize: 12 }}>TEST MOCK:</span>
+          {Object.keys(MOCK_SAMPLES).map(key => (
+            <button
+              key={key}
+              onClick={() => setSelectedMock(key)}
+              style={{
+                fontSize: 10,
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid #6366f1',
+                background: selectedMock === key ? '#6366f1' : 'transparent',
+                color: selectedMock === key ? 'white' : '#6366f1',
+                cursor: 'pointer'
+              }}
+            >
+              {key}
+            </button>
+          ))}
+        </div> */}
+
+        <p className="hero-sub" style={{ marginTop: 20 }}>
           Upload any medical report — PDF, image, or text — and get an instant,
           easy-to-understand explanation with highlighted abnormal values.
         </p>

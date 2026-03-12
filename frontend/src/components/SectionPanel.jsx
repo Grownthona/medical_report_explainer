@@ -1,12 +1,17 @@
 import "../styles/SectionPanel.css";
 import { RISK_CONFIG } from "../utils/constants";
 import TestCard from "./TestCard";
+import VoiceExplainer from "./VoiceExplainer";
 
 export default function SectionPanel({ section }) {
   const risk = RISK_CONFIG[section.risk_level] || RISK_CONFIG.Low;
 
   return (
     <div>
+      {/* Voice Explainer Section */}
+      {section.voice_explanation && (
+        <VoiceExplainer text={section.voice_explanation} />
+      )}
       {/* Summary card */}
       <div className="section-summary-card">
         <div className="summary-glow"></div>

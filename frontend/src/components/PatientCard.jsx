@@ -1,17 +1,17 @@
 import "../styles/PatientCard.css";
 
-export default function PatientCard({ patient, summary }) {
+export default function PatientCard({ patient, summary = {} }) {
   const stats = [
-    { label: "Total Tests", value: summary.total_tests, color: "#6366f1" },
+    { label: "Total Tests", value: summary?.total_tests || 0, color: "#6366f1" },
     {
       label: "Abnormal",
-      value: summary.abnormal_count,
-      color: summary.abnormal_count > 0 ? "#f97316" : "#22c55e",
+      value: summary?.abnormal_count || 0,
+      color: (summary?.abnormal_count || 0) > 0 ? "#f97316" : "#22c55e",
     },
     {
       label: "Critical",
-      value: summary.critical_count,
-      color: summary.has_critical ? "#f43f5e" : "#22c55e",
+      value: summary?.critical_count || 0,
+      color: summary?.has_critical ? "#f43f5e" : "#22c55e",
     },
   ];
 
