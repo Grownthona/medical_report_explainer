@@ -3,11 +3,12 @@ import { RISK_CONFIG } from "../utils/constants";
 import TestCard from "./TestCard";
 import VoiceExplainer from "./VoiceExplainer";
 
-export default function SectionPanel({ section }) {
+export default function SectionPanel({ key, section }) {
   const risk = RISK_CONFIG[section.risk_level] || RISK_CONFIG.Low;
 
   return (
-    <div>
+    <div key={key}>
+      <h1>Report {key}</h1>
       {/* Voice Explainer Section */}
       {section.voice_explanation && (
         <VoiceExplainer text={section.voice_explanation} />

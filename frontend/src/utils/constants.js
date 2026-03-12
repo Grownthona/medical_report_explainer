@@ -1,4 +1,4 @@
-export const LANGUAGES = ["English", "বাংলা", "हिंदी", "Arabic", "Spanish", "French", "Portuguese"];
+export const LANGUAGES = ["en", "bn", "hi", "ar", "es", "fr", "pt"];
 
 export const STATUS_CONFIG = {
   Normal:  { color: "#22c55e", bg: "rgba(34,197,94,0.08)",   border: "rgba(34,197,94,0.25)",  label: "Normal"   },
