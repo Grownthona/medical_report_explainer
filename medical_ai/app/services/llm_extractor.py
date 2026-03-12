@@ -47,9 +47,10 @@ from typing import Optional
 
 import urllib.request
 import urllib.error
+
 from dotenv import load_dotenv
 
-load_dotenv() # Load variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -63,69 +64,119 @@ _TIMEOUT         = int(os.getenv("GEMINI_TIMEOUT", "30"))
 # PROMPT  — single prompt for ALL report types
 # ══════════════════════════════════════════════════════════════════════════════
 
-_REPORT_PROMPT = """You are a cautious and educational medical explanation AI.
+# ── Language config ───────────────────────────────────────────────────────────
+_LANGUAGES: dict[str, dict[str, str]] = {
+    "en": {
+        "name":        "English",
+        "instruction": "Write ALL text fields in English.",
+        "consult":     "Consult a doctor",
+    },
+    "bn": {
+        "name":        "Bengali",
+        "instruction": "সমস্ত টেক্সট ফিল্ড বাংলায় লিখুন। ONLY use Bengali for all explanations, summaries, advice, and voice_explanation. Do NOT use English for any text field.",
+        "consult":     "একজন ডাক্তারের পরামর্শ নিন",
+    },
+    "ar": {
+        "name":        "Arabic",
+        "instruction": "اكتب جميع حقول النص باللغة العربية. ONLY use Arabic for all explanations, summaries, advice, and voice_explanation.",
+        "consult":     "استشر طبيبًا",
+    },
+    "hi": {
+        "name":        "Hindi",
+        "instruction": "सभी टेक्स्ट फ़ील्ड हिंदी में लिखें। ONLY use Hindi for all explanations, summaries, advice, and voice_explanation.",
+        "consult":     "किसी डॉक्टर से सलाह लें",
+    },
+    "ur": {
+        "name":        "Urdu",
+        "instruction": "تمام متن کے خانوں میں اردو لکھیں۔ ONLY use Urdu for all explanations, summaries, advice, and voice_explanation.",
+        "consult":     "کسی ڈاکٹر سے مشورہ کریں",
+    },
+}
+
+def _get_lang(language: str) -> dict[str, str]:
+    """Return language config dict, falling back to English."""
+    return _LANGUAGES.get(language, _LANGUAGES["en"])
+
+
+def _build_prompt(language: str = "en") -> str:
+    """
+    Build the system prompt with language requirement baked in.
+    The language instruction appears at the TOP (before task description)
+    so the model treats it as a primary constraint, not an afterthought.
+    """
+    lang    = _get_lang(language)
+    consult = lang["consult"]
+    lang_instruction = lang["instruction"]
+
+    return f"""You are a cautious and educational medical explanation AI.
+
+LANGUAGE REQUIREMENT (MANDATORY):
+{lang_instruction}
+Every single text field in your JSON response — including test_name (if translatable),
+keyword_explanation, result_explanation, summary, voice_explanation, and advice —
+MUST be written in {lang["name"]}. This is non-negotiable.
+The only exceptions are: numeric values, units (g/dL, mg/L etc.), and the status
+field values ("Normal", "High", "Low", "Unknown") which must stay in English for
+downstream parsing.
 
 TASK:
 Analyze the medical report and return structured JSON.
 For EACH medical test or finding, create a JSON object with the following fields:
 
-1) "test_name": Name of the test or finding.
+1) "test_name": Name of the test or finding (transliterate/translate if natural in {lang["name"]}).
 2) "value": The measured value (as a number if possible, else as string).
-3) "unit": The unit of measurement, if provided.
+3) "unit": The unit of measurement, if provided. Keep as-is (e.g. g/dL, mmol/L).
 4) "reference_range": The normal reference range, if provided in the report.
-5) "status": "Normal", "High", "Low", or "Unknown" if unclear.
-6) "keyword_explanation": Explain the medical keyword in detail:
-   - What the test or finding measures
-   - What body system it relates to
-   - Common reasons it may go high or low
-   - Possible symptoms (general, not diagnosing)
-   - Keep it short — a few lines only
-7) "result_explanation": Explain the patient's specific result in simple language.
+5) "status": MUST be one of: "Normal", "High", "Low", "Unknown" — always in English.
+6) "keyword_explanation": In {lang["name"]} — explain what this test measures,
+   why it matters, what body system it relates to, and common reasons it goes high or low.
+   Keep it concise (1-2 lines).
+7) "result_explanation": In {lang["name"]} — explain this patient's specific result
+   in simple terms. Is it normal? What might it mean? What should they do?
 
 IMPORTANT INSTRUCTIONS:
 - Analyze each test or finding separately in its own JSON object.
 - Do NOT merge explanations between different tests.
 - Keep explanations factual, neutral, and educational.
-- Maintain a calm and professional tone.
-- Always include all JSON keys, even if the value is unknown (use "Unknown" or "").
+- Always include all JSON keys even if value is unknown (use "Unknown" or "").
 
 STRICT RULES:
 - Do NOT diagnose diseases.
 - Do NOT prescribe medication.
 - Do NOT suggest specific treatments.
-- If unsure, say "Consult a doctor".
+- If unsure, say "{consult}".
 - Do NOT invent missing values.
 - Only analyze what is explicitly present in the report.
 - Return VALID JSON only. No markdown. No text outside JSON.
 
-VOICE EXPLANATION:
-Also return a "voice_explanation" field — a short spoken-style paragraph (3-5 sentences)
-that can be read aloud to the patient. Rules:
-- Use simple, everyday language (no medical jargon).
-- Mention the overall result (good/mixed/concerning).
-- Name any abnormal values naturally, e.g. "your ESR is a bit high".
-- End with a calm, reassuring next step ("it's a good idea to see your doctor about this").
-- Do NOT say "your report shows" — speak directly: "Your haemoglobin looks good."
+VOICE EXPLANATION (in {lang["name"]}):
+Return a "voice_explanation" field — a short spoken-style paragraph (3-5 sentences)
+in {lang["name"]} that can be read aloud to the patient. Rules:
+- Use simple everyday language (no medical jargon).
+- Mention the overall result (good / mixed / concerning).
+- Name any abnormal values naturally.
+- End with a calm reassuring next step.
+- Speak directly — do NOT say "your report shows".
 - Do NOT diagnose or prescribe.
 
 Return this exact JSON structure:
-{
-  "summary": "Overall simplified explanation of the report in plain language",
-  "voice_explanation": "Your blood test results are mostly normal. Your haemoglobin and platelet counts look good. However, your ESR is a little high, which can sometimes mean there is some inflammation in the body. It is a good idea to follow up with your doctor to discuss this finding.",
+{{
+  "summary": "Overall simplified explanation in {lang["name"]}",
+  "voice_explanation": "Spoken paragraph in {lang["name"]} for TTS",
   "tests_analysis": [
-    {
-      "test_name": "Hemoglobin",
+    {{
+      "test_name": "test name",
       "value": 10.2,
       "unit": "g/dL",
       "reference_range": "13.0-17.0",
       "status": "Low",
-      "keyword_explanation": "...",
-      "result_explanation": "..."
-    }
+      "keyword_explanation": "explanation in {lang["name"]}",
+      "result_explanation": "explanation in {lang["name"]}"
+    }}
   ],
   "risk_level": "Low | Medium | High",
-  "advice": "General safety advice only. If abnormalities exist, recommend consulting a doctor."
-}"""
+  "advice": "General safety advice in {lang["name"]}. If abnormalities exist, recommend consulting a doctor."
+}}"""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -160,6 +211,118 @@ def _call_llm(system_prompt: str, user_message: str) -> Optional[str]:
     except Exception as e:
         logger.error("Gemini call failed: %s", e)
     return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OLLAMA CALL  (local inference — no API key required)
+#
+# Usage:
+#   Set OLLAMA_ENABLED=true in your .env to route all extraction through Ollama.
+#   Set OLLAMA_MODEL to any model you have pulled, e.g. "llama3", "mistral",
+#   "phi3", "gemma2". Defaults to "llama3".
+#   Set OLLAMA_BASE_URL if Ollama is not on localhost (default http://localhost:11434).
+#
+#   To call directly from code:
+#       result = extract_report_ollama(text, report_type="LAB", gender="female")
+#
+# Notes:
+#   • Ollama uses the /api/chat endpoint with OpenAI-compatible message format.
+#   • JSON mode is requested via "format": "json" — works on llama3, mistral,
+#     phi3, gemma2. If your model ignores it, _parse_json() will still strip
+#     markdown fences and extract the JSON object.
+#   • Ollama can be slow for large reports — OLLAMA_TIMEOUT defaults to 120s.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+_OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL",    "llama3")
+_OLLAMA_TIMEOUT  = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+_OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED",  "false").lower() == "true"
+
+
+def _call_ollama(system_prompt: str, user_message: str) -> Optional[str]:
+    """
+    Call a locally running Ollama model via its /api/chat REST endpoint.
+    Returns raw text response, or None on any failure.
+
+    The prompt instructs the model to return JSON — same contract as _call_llm().
+    Works offline with no API key. Configure via env vars:
+        OLLAMA_BASE_URL  (default: http://localhost:11434)
+        OLLAMA_MODEL     (default: llama3)
+        OLLAMA_TIMEOUT   (default: 120s — local models are slower)
+    """
+    url  = f"{_OLLAMA_BASE_URL}/api/chat"
+    body = {
+        "model":    _OLLAMA_MODEL,
+        "format":   "json",          # request JSON output where supported
+        "stream":   False,           # single response, not streaming
+        "options":  {"temperature": 0.1},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_message},
+        ],
+    }
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=_OLLAMA_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode())
+        # Ollama /api/chat response: { "message": { "content": "..." }, ... }
+        return data["message"]["content"]
+    except urllib.error.URLError as e:
+        logger.error("Ollama not reachable at %s — is it running? (%s)", _OLLAMA_BASE_URL, e)
+    except KeyError:
+        logger.error("Ollama response missing expected fields: %s", data)
+    except TimeoutError:
+        logger.error("Ollama timed out after %ss (model: %s)", _OLLAMA_TIMEOUT, _OLLAMA_MODEL)
+    except Exception as e:
+        logger.error("Ollama call failed: %s", e)
+    return None
+
+
+def extract_report_ollama(
+    text:        str,
+    report_type: str = "UNKNOWN",
+    sub_type:    str = "UNKNOWN",
+    gender:      str = "unknown",
+    language:    str = "en",
+) -> dict:
+    """
+    Extract a structured medical report using a local Ollama model.
+
+    Drop-in replacement for extract_report() — same return shape, same prompt.
+    Use this when:
+      • You want fully offline / air-gapped processing.
+      • You want to avoid Gemini API costs during development.
+      • You want to test a specific local model.
+
+    Returns the same dict shape as extract_report():
+        { summary, voice_explanation, tests_analysis, risk_level,
+          advice, raw_text, metadata }
+
+    Example:
+        from services.llm_extractor import extract_report_ollama
+        result = extract_report_ollama(raw_text, report_type="LAB", gender="female")
+    """
+    gender_hint  = f" Patient gender: {gender}." if gender != "unknown" else ""
+    user_message = (
+        f"Report type: {report_type} / {sub_type}.{gender_hint}\n\n"
+        f"Medical Report:\n{text}"
+        f"\n\nReturn ONLY a valid JSON object. No markdown. No text outside JSON."
+    )
+
+    raw    = _call_ollama(_build_prompt(language), user_message)
+    parsed = _parse_json(raw) if raw else None
+
+    if not parsed:
+        logger.warning(
+            "Ollama extraction failed for %s/%s (model: %s) — raw_text stored only",
+            report_type, sub_type, _OLLAMA_MODEL,
+        )
+        return _empty_report(report_type, sub_type, text, gender)
+
+    return _normalise_tests(parsed, report_type, sub_type, text, gender)
 
 
 def _parse_json(raw: str) -> Optional[dict]:
@@ -247,6 +410,7 @@ def extract_report(
     report_type: str = "UNKNOWN",
     sub_type:    str = "UNKNOWN",
     gender:      str = "unknown",
+    language:    str = "en",
 ) -> dict:
     """
     Extract structured educational analysis from ANY medical report.
@@ -279,16 +443,25 @@ def extract_report(
             "metadata":    { "gender": str, "confidence": "HIGH"|"LOW" }
         }
         Note: metadata is internal — consumed by pipeline, stripped from final output.
+        Set OLLAMA_ENABLED=true to route through local Ollama instead of Gemini.
     """
+    # ── Ollama fast-path ──────────────────────────────────────────────────────
+    if _OLLAMA_ENABLED:
+        logger.debug("OLLAMA_ENABLED — routing to local model %s", _OLLAMA_MODEL)
+        return extract_report_ollama(text, report_type=report_type,
+                                     sub_type=sub_type, gender=gender, language=language)
+
+    # ── Gemini path ───────────────────────────────────────────────────────────
     gender_hint  = f" Patient gender: {gender}." if gender != "unknown" else ""
     user_message = (
         f"Report type: {report_type} / {sub_type}.{gender_hint}\n\n"
         f"Medical Report:\n{text}"
     )
 
-    raw = _call_llm(_REPORT_PROMPT, user_message)
+    prompt = _build_prompt(language)
+    raw = _call_llm(prompt, user_message)
     if raw is None:
-        raw = _call_llm(_REPORT_PROMPT, user_message + "\n\nReturn ONLY a JSON object.")
+        raw = _call_llm(prompt, user_message + "\n\nReturn ONLY a JSON object.")
 
     parsed = _parse_json(raw) if raw else None
 
@@ -451,6 +624,7 @@ def _score_category(chunk: str) -> tuple[str, int]:
     best, score = max(scores.items(), key=lambda x: x[1])
     return (best, score) if score > 0 else ("UNKNOWN", 0)
 
+
 def split_by_category(text: str) -> dict[str, list[str]]:
     """
     Split mixed PDF text into per-category section lists.
@@ -508,10 +682,13 @@ def split_by_category(text: str) -> dict[str, list[str]]:
 
     return result
 
+
+
 def extract_multi_section(
     sections:  dict[str, list[str]],
     gender:    str = "unknown",
     sub_types: dict[str, str] | None = None,
+    language:  str = "en",
 ) -> dict[str, list[dict]]:
     """
     Extract all sections from a mixed PDF.
@@ -548,7 +725,7 @@ def extract_multi_section(
             logger.debug("Processing %s section %d/%d", category, idx + 1, len(section_list))
 
             report = extract_report(section_text, report_type=category,
-                                    sub_type=sub_type, gender=gender)
+                                    sub_type=sub_type, gender=gender, language=language)
 
             # LAB: attach structured lab_values from regex + LLM second-pass
             if category == "LAB":

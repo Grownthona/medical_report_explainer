@@ -2,8 +2,8 @@
 extractor.py  ─  Unified Medical Report Extractor
 ══════════════════════════════════════════════════
 Category → extractor routing:
-  LAB            → regex pipeline (always deterministic, zero API cost)
-                   + LLM second-pass to fill missed tests
+  LAB            → regex pipeline only (deterministic, zero API cost)
+                   LLM explanations added later by report_assembler
   IMAGING        → extract_report() via LLM  |  keyword fallback
   CLINICAL       → extract_report() via LLM  |  keyword fallback
   SPECIALIST     → extract_report() via LLM  |  keyword fallback
@@ -35,7 +35,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 
 from services.known_tests    import KNOWN_TESTS
-from services.llm_extractor  import extract_report, extract_lab_values  # extract_lab_values is compat shim
+from services.llm_extractor  import extract_report
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -371,7 +371,7 @@ def extract_conditions(text: str) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 5 - UNIFIED DISPATCHER
 #
-# LAB   → regex always  +  LLM second-pass for missed tests
+# LAB   → regex only (report_assembler handles LLM explanations separately)
 # Other → extract_report() (LLM)  |  _keyword_extract() fallback
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -380,6 +380,7 @@ def extract(
     category: str,
     sub_type: str = "UNKNOWN",
     gender:   str = "unknown",
+    language: str = "en",
 ) -> dict | list[dict]:
     """
     Unified entry point called by report_assembler.py.
@@ -392,12 +393,11 @@ def extract(
     """
     primary = category.split(" + ")[0].strip().upper()
 
-    # ── LAB: regex pipeline + LLM second-pass ────────────────────────────────
+    # ── LAB: regex pipeline only ─────────────────────────────────────────────
+    # LLM explanations are added later by report_assembler via extract_report().
+    # Running extract_lab_values() here caused a redundant LLM call → timeouts.
     if primary == "LAB":
-        regex_hits  = extract_lab_results(text, gender=gender)
-        found_names = [r["test"] for r in regex_hits if "test" in r]
-        llm_hits    = extract_lab_values(text, already_extracted=found_names, gender=gender)
-        return regex_hits + llm_hits
+        return extract_lab_results(text, gender=gender)
 
     # ── UNKNOWN ───────────────────────────────────────────────────────────────
     if primary == "UNKNOWN":
@@ -411,7 +411,7 @@ def extract(
         }
 
     # ── Non-LAB: LLM first, keyword fallback if LLM unavailable ──────────────
-    report = extract_report(text, report_type=primary, sub_type=sub_type, gender=gender)
+    report = extract_report(text, report_type=primary, sub_type=sub_type, gender=gender, language=language)
 
     if report["metadata"]["confidence"] == "LOW":
         # LLM failed — use keyword fallback but keep raw_text from extract_report
