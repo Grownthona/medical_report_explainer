@@ -151,33 +151,33 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
         if lab_test_names:
             header.report_type = infer_report_type(lab_test_names)
 
-        mixed_report = {
-            "summary": " | ".join(
-                r.get("summary", "")
-                for section_list in multi_results.values()
-                for r in section_list if r.get("summary")
-            ),
-            "voice_explanation": next(
-                (r.get("voice_explanation", "")
-                 for section_list in multi_results.values()
-                 for r in section_list if r.get("voice_explanation")),
-                "",
-            ),
-            "tests_analysis": all_tests,
-            "risk_level": (
-                "High"   if any(t.get("status") in ("High", "CRITICAL_HIGH", "CRITICAL_LOW")
-                                for t in all_tests) else
-                "Medium" if any(t.get("status") in ("Low", "HIGH", "LOW")
-                                for t in all_tests) else
-                "Low"
-            ),
-            "advice": " | ".join(
-                r.get("advice", "")
-                for section_list in multi_results.values()
-                for r in section_list if r.get("advice")
-            ),
-            "raw_text": raw,
-        }
+        # mixed_report = {
+        #     "summary": " | ".join(
+        #         r.get("summary", "")
+        #         for section_list in multi_results.values()
+        #         for r in section_list if r.get("summary")
+        #     ),
+        #     "voice_explanation": next(
+        #         (r.get("voice_explanation", "")
+        #          for section_list in multi_results.values()
+        #          for r in section_list if r.get("voice_explanation")),
+        #         "",
+        #     ),
+        #     "tests_analysis": all_tests,
+        #     "risk_level": (
+        #         "High"   if any(t.get("status") in ("High", "CRITICAL_HIGH", "CRITICAL_LOW")
+        #                         for t in all_tests) else
+        #         "Medium" if any(t.get("status") in ("Low", "HIGH", "LOW")
+        #                         for t in all_tests) else
+        #         "Low"
+        #     ),
+        #     "advice": " | ".join(
+        #         r.get("advice", "")
+        #         for section_list in multi_results.values()
+        #         for r in section_list if r.get("advice")
+        #     ),
+        #     "raw_text": raw,
+        # }
 
         return {
             "is_mixed":      True,
@@ -188,7 +188,7 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
                 "is_mixed":   True,
             },
             "patient":  header.to_dict(),
-            "report":   mixed_report,
+            # "report":   mixed_report,
             "sections": multi_results,
             "summary":  _compute_summary(all_tests).to_dict(),
         }
