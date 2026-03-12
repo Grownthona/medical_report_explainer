@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, asdict
 
 from services.patient_header import extract_header, PatientHeader, infer_report_type
-from services.extractor      import extract,extract_lab_results
+from services.extractor      import extract, extract_lab_results
 from services.classifier     import classify, ClassificationResult
 from services.llm_extractor  import split_by_category, extract_multi_section, extract_report
 
@@ -18,11 +18,6 @@ logger = logging.getLogger(__name__)
 import dataclasses as _dc
 
 def _to_serializable(obj):
-    """
-    Recursively convert any dataclass instances inside the output dict
-    to plain dicts so FastAPI / json.dumps never sees a non-mapping object.
-    Called as the LAST step of assemble_report() before returning.
-    """
     if _dc.is_dataclass(obj) and not isinstance(obj, type):
         return _to_serializable(_dc.asdict(obj))
     if isinstance(obj, dict):
@@ -33,7 +28,7 @@ def _to_serializable(obj):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SUMMARY — test counts
+# SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
@@ -48,7 +43,6 @@ class ReportSummary:
 
 
 def _compute_summary(tests_analysis: list[dict]) -> ReportSummary:
-    """Compute summary counts from tests_analysis entries."""
     _ABNORMAL = {"High", "Low", "HIGH", "LOW", "CRITICAL_HIGH", "CRITICAL_LOW"}
     _CRITICAL  = {"CRITICAL_HIGH", "CRITICAL_LOW"}
     return ReportSummary(
@@ -66,7 +60,6 @@ def _compute_summary(tests_analysis: list[dict]) -> ReportSummary:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _merge_status(raw_status: str) -> str:
-    """Normalise UPPERCASE regex statuses to Title-case for unified output."""
     s = raw_status.upper()
     if s in ("CRITICAL_HIGH", "HIGH"): return "High"
     if s in ("CRITICAL_LOW",  "LOW"):  return "Low"
@@ -100,7 +93,6 @@ def _build_merged_tests(lab_values: list[dict], llm_report: dict) -> list[dict]:
             "result_explanation":  llm_row.get("result_explanation", ""),
         })
 
-    # Append any LLM-found tests the regex missed
     regex_names = {r.get("test", "").lower() for r in lab_values}
     for item in llm_report.get("tests_analysis", []):
         if item["test_name"].lower() not in regex_names:
@@ -110,7 +102,6 @@ def _build_merged_tests(lab_values: list[dict], llm_report: dict) -> list[dict]:
 
 
 def _risk_from_lab_values(lab_values: list[dict]) -> str:
-    """Derive risk level from regex-based statuses (reliable, no hallucination)."""
     statuses = [r.get("status", "") for r in lab_values]
     if any(s in ("CRITICAL_HIGH", "CRITICAL_LOW") for s in statuses):
         return "High"
@@ -120,10 +111,6 @@ def _risk_from_lab_values(lab_values: list[dict]) -> str:
 
 
 def _strip_internal_fields(report: dict) -> dict:
-    """
-    Return only the fields that belong in the final "report" key.
-    Drops report_type, sub_type, metadata — those live in document_type/patient.
-    """
     keep = {"summary", "voice_explanation", "tests_analysis", "risk_level", "advice", "raw_text"}
     return {k: v for k, v in report.items() if k in keep}
 
@@ -132,11 +119,6 @@ _STATUS_MAP = {"Normal": "NORMAL", "High": "HIGH", "Low": "LOW", "Unknown": "UNK
 
 
 def _tests_analysis_to_lab_values(tests: list[dict]) -> list[dict]:
-    """
-    Convert tests_analysis entries (LLM output) into the flat lab_values shape
-    { result_type, test, value, unit, status } used by the rest of the pipeline.
-    Skips non-numeric values (imaging findings, text notes).
-    """
     out = []
     for item in tests:
         raw_val = item.get("value", "")
@@ -159,14 +141,8 @@ def _tests_analysis_to_lab_values(tests: list[dict]) -> list[dict]:
 
 def _collect_lab_values(sections: dict[str, list[dict]]) -> list[dict]:
     """
-    Flatten lab values from all LAB sections in a mixed result.
-
-    Priority per section:
-      1. tests_analysis — always populated when LLM succeeded.
-         (lab_values may be [] even when 17 tests are present in tests_analysis)
-      2. lab_values     — regex pipeline output; used as fallback only.
-
-    Deduplicates by test name across all sections.
+    Flatten lab values from all LAB sections.
+    Prefers tests_analysis (always populated when LLM succeeded) over lab_values.
     """
     out  = []
     seen: set[str] = set()
@@ -191,11 +167,7 @@ def _collect_lab_values(sections: dict[str, list[dict]]) -> list[dict]:
 
 
 def _collect_mixed_tests_analysis(multi_results: dict[str, list[dict]]) -> list[dict]:
-    """
-    For mixed PDFs: flatten all tests_analysis from all sections into one list.
-    Used to compute the top-level summary counts.
-    """
-    out = []
+    out  = []
     seen: set[str] = set()
     for section_list in multi_results.values():
         for report in section_list:
@@ -212,33 +184,34 @@ def _collect_mixed_tests_analysis(multi_results: dict[str, list[dict]]) -> list[
 def assemble_report(raw: str, language: str = "en") -> dict:
     """
     Single entry point for all uploads — mixed or single report.
- 
+
+    KEY OPTIMISATION — LAB path:
+      Previously: extract_lab_results() [regex] + extract_report() [LLM] called
+                  separately, then a SECOND extract_report() call happened inside
+                  extract_multi_section(). Now extract_report() is called ONCE
+                  and its output is reused for both explanations and merged tests.
+
     Args:
         raw:      Raw OCR or report text.
         language: Response language passed to LLM ("en", "bn", "ar", "hi", "ur").
-                  Defaults to "en". Forwarded to extract_report() and extract_header().
- 
-    Auto-detects mixed PDF vs single report via split_by_category().
-    Returns a unified dict in the documented output shape.
     """
- 
+
     # ── Stage 1: patient header ───────────────────────────────────────────────
     header: PatientHeader = extract_header(raw, lab_results=None)
- 
+
     # ── Stage 2: mixed vs single detection ───────────────────────────────────
     sections_map = split_by_category(raw)
     is_mixed     = len(sections_map) > 1
- 
+
     # ═════════════════════════════════════════════════════════════════════
     # PATH A — MIXED PDF
     # ═════════════════════════════════════════════════════════════════════
     if is_mixed:
+        # extract_multi_section now runs sections in parallel (ThreadPoolExecutor)
         multi_results = extract_multi_section(sections_map, gender=header.gender, language=language)
- 
-        # Flatten all tests across all sections for summary counts
+
         all_tests = _collect_mixed_tests_analysis(multi_results)
- 
-        # Set patient report_type from LAB tests if present
+
         lab_test_names = [
             t["test_name"]
             for report in multi_results.get("LAB", [])
@@ -246,10 +219,9 @@ def assemble_report(raw: str, language: str = "en") -> dict:
         ]
         if lab_test_names:
             header.report_type = infer_report_type(lab_test_names)
- 
-        # Build a minimal top-level report (full detail is in sections)
+
         mixed_report = {
-            "summary":        " | ".join(
+            "summary": " | ".join(
                 r.get("summary", "")
                 for section_list in multi_results.values()
                 for r in section_list
@@ -263,14 +235,14 @@ def assemble_report(raw: str, language: str = "en") -> dict:
                 ""
             ),
             "tests_analysis": all_tests,
-            "risk_level":     (
+            "risk_level": (
                 "High"   if any(t.get("status") in ("High", "CRITICAL_HIGH", "CRITICAL_LOW")
                                 for t in all_tests) else
                 "Medium" if any(t.get("status") in ("Low", "HIGH", "LOW")
                                 for t in all_tests) else
                 "Low"
             ),
-            "advice":         " | ".join(
+            "advice": " | ".join(
                 r.get("advice", "")
                 for section_list in multi_results.values()
                 for r in section_list
@@ -278,7 +250,7 @@ def assemble_report(raw: str, language: str = "en") -> dict:
             ),
             "raw_text": raw,
         }
- 
+
         return _to_serializable({
             "is_mixed":      True,
             "document_type": {
@@ -289,36 +261,42 @@ def assemble_report(raw: str, language: str = "en") -> dict:
             },
             "patient":  header.to_dict(),
             "report":   mixed_report,
-            "sections": multi_results,   # full per-category detail
+            "sections": multi_results,
             "summary":  _compute_summary(all_tests).to_dict(),
         })
- 
+
     # ═════════════════════════════════════════════════════════════════════
     # PATH B — SINGLE REPORT
     # ═════════════════════════════════════════════════════════════════════
- 
-    # Classify
+
     classification: ClassificationResult = classify(raw)
- 
+
     effective_sub = classification.sub_type
     if effective_sub == "UNKNOWN" and classification.sub_scores:
         effective_sub = max(classification.sub_scores, key=classification.sub_scores.get)
- 
+
     primary = classification.category.split(" + ")[0].strip().upper()
 
-    # ── LAB: regex values + one LLM call for explanations ───────────────────
+    # ── LAB: regex (fast, deterministic) + ONE LLM call for explanations ─────
+    # ─────────────────────────────────────────────────────────────────────────
     if primary == "LAB":
+        # Step 1: fast regex pass (no network call)
         lab_values = extract_lab_results(raw, gender=header.gender)
-        
+
         header.report_type = infer_report_type(
             [r["test"] for r in lab_values if "test" in r]
         )
- 
-        llm_report   = extract_report(raw, report_type="LAB",
-                                      sub_type=effective_sub, gender=header.gender,
-                                      language=language)
+
+        # Step 2: single LLM call for explanations
+        llm_report   = extract_report(
+            raw, report_type="LAB",
+            sub_type=effective_sub, gender=header.gender,
+            language=language,
+        )
+
+        # Step 3: merge — regex values win, LLM fills explanations
         merged_tests = _build_merged_tests(lab_values, llm_report)
- 
+
         report = {
             "summary":           llm_report.get("summary", ""),
             "voice_explanation": llm_report.get("voice_explanation", ""),
@@ -329,8 +307,8 @@ def assemble_report(raw: str, language: str = "en") -> dict:
             "advice":            llm_report.get("advice", ""),
             "raw_text":          raw,
         }
- 
-    # ── Non-LAB: one LLM call via extract() ──────────────────────────────────
+
+    # ── Non-LAB: single LLM call via extract() ────────────────────────────────
     else:
         header.report_type = effective_sub
         extracted  = extract(raw, category=primary, sub_type=effective_sub,
@@ -345,7 +323,7 @@ def assemble_report(raw: str, language: str = "en") -> dict:
             "raw_text":          raw,
         }
         report.setdefault("raw_text", raw)
- 
+
     return _to_serializable({
         "is_mixed":      False,
         "document_type": {
@@ -359,4 +337,3 @@ def assemble_report(raw: str, language: str = "en") -> dict:
         "sections": {},
         "summary":  _compute_summary(report.get("tests_analysis", [])).to_dict(),
     })
- 

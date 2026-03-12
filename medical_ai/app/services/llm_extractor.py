@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import urllib.request
@@ -57,7 +58,24 @@ logger = logging.getLogger(__name__)
 # ── Gemini config ─────────────────────────────────────────────────────────────
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _MODEL           = os.getenv("GEMINI_MODEL",   "gemini-2.5-flash")
-_TIMEOUT         = int(os.getenv("GEMINI_TIMEOUT", "30"))
+_TIMEOUT         = int(os.getenv("GEMINI_TIMEOUT", "45"))   # raised from 30 → 45
+
+# ── Text truncation — keeps LLM input small and fast ─────────────────────────
+# Gemini 2.5 Flash handles large contexts but inference time grows linearly.
+# Medical reports rarely need more than 3 000 chars for accurate extraction.
+_MAX_INPUT_CHARS = int(os.getenv("MAX_REPORT_CHARS", "4000"))
+
+
+def _truncate(text: str, max_chars: int = _MAX_INPUT_CHARS) -> str:
+    """
+    Truncate report text to max_chars.
+    Prefers cutting at a newline boundary to avoid splitting mid-value.
+    """
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars]
+    last_nl = cut.rfind("\n")
+    return cut[:last_nl] if last_nl > max_chars * 0.8 else cut
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -99,11 +117,6 @@ def _get_lang(language: str) -> dict[str, str]:
 
 
 def _build_prompt(language: str = "en") -> str:
-    """
-    Build the system prompt with language requirement baked in.
-    The language instruction appears at the TOP (before task description)
-    so the model treats it as a primary constraint, not an afterthought.
-    """
     lang    = _get_lang(language)
     consult = lang["consult"]
     lang_instruction = lang["instruction"]
@@ -123,41 +136,23 @@ TASK:
 Analyze the medical report and return structured JSON.
 For EACH medical test or finding, create a JSON object with the following fields:
 
-1) "test_name": Name of the test or finding (transliterate/translate if natural in {lang["name"]}).
-2) "value": The measured value (as a number if possible, else as string).
-3) "unit": The unit of measurement, if provided. Keep as-is (e.g. g/dL, mmol/L).
-4) "reference_range": The normal reference range, if provided in the report.
+1) "test_name": Name of the test or finding.
+2) "value": The measured value (number if possible, else string).
+3) "unit": Unit of measurement, if provided.
+4) "reference_range": The normal reference range, if provided.
 5) "status": MUST be one of: "Normal", "High", "Low", "Unknown" — always in English.
-6) "keyword_explanation": In {lang["name"]} — explain what this test measures,
-   why it matters, what body system it relates to, and common reasons it goes high or low.
-   Keep it concise (1-2 lines).
-7) "result_explanation": In {lang["name"]} — explain this patient's specific result
-   in simple terms. Is it normal? What might it mean? What should they do?
-
-IMPORTANT INSTRUCTIONS:
-- Analyze each test or finding separately in its own JSON object.
-- Do NOT merge explanations between different tests.
-- Keep explanations factual, neutral, and educational.
-- Always include all JSON keys even if value is unknown (use "Unknown" or "").
+6) "keyword_explanation": In {lang["name"]} — what this test measures (1-2 lines).
+7) "result_explanation": In {lang["name"]} — what this patient's result means.
 
 STRICT RULES:
-- Do NOT diagnose diseases.
-- Do NOT prescribe medication.
-- Do NOT suggest specific treatments.
+- Do NOT diagnose diseases or prescribe medication.
+- Do NOT invent missing values. Only analyze what is present.
 - If unsure, say "{consult}".
-- Do NOT invent missing values.
-- Only analyze what is explicitly present in the report.
 - Return VALID JSON only. No markdown. No text outside JSON.
 
 VOICE EXPLANATION (in {lang["name"]}):
-Return a "voice_explanation" field — a short spoken-style paragraph (3-5 sentences)
-in {lang["name"]} that can be read aloud to the patient. Rules:
-- Use simple everyday language (no medical jargon).
-- Mention the overall result (good / mixed / concerning).
-- Name any abnormal values naturally.
-- End with a calm reassuring next step.
-- Speak directly — do NOT say "your report shows".
-- Do NOT diagnose or prescribe.
+A short spoken-style paragraph (3-5 sentences) readable aloud. Simple language,
+mention overall result and any abnormal values, end with a calm next step.
 
 Return this exact JSON structure:
 {{
@@ -175,7 +170,7 @@ Return this exact JSON structure:
     }}
   ],
   "risk_level": "Low | Medium | High",
-  "advice": "General safety advice in {lang["name"]}. If abnormalities exist, recommend consulting a doctor."
+  "advice": "General safety advice in {lang["name"]}."
 }}"""
 
 
@@ -215,22 +210,6 @@ def _call_llm(system_prompt: str, user_message: str) -> Optional[str]:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # OLLAMA CALL  (local inference — no API key required)
-#
-# Usage:
-#   Set OLLAMA_ENABLED=true in your .env to route all extraction through Ollama.
-#   Set OLLAMA_MODEL to any model you have pulled, e.g. "llama3", "mistral",
-#   "phi3", "gemma2". Defaults to "llama3".
-#   Set OLLAMA_BASE_URL if Ollama is not on localhost (default http://localhost:11434).
-#
-#   To call directly from code:
-#       result = extract_report_ollama(text, report_type="LAB", gender="female")
-#
-# Notes:
-#   • Ollama uses the /api/chat endpoint with OpenAI-compatible message format.
-#   • JSON mode is requested via "format": "json" — works on llama3, mistral,
-#     phi3, gemma2. If your model ignores it, _parse_json() will still strip
-#     markdown fences and extract the JSON object.
-#   • Ollama can be slow for large reports — OLLAMA_TIMEOUT defaults to 120s.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -240,21 +219,11 @@ _OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED",  "false").lower() == "true"
 
 
 def _call_ollama(system_prompt: str, user_message: str) -> Optional[str]:
-    """
-    Call a locally running Ollama model via its /api/chat REST endpoint.
-    Returns raw text response, or None on any failure.
-
-    The prompt instructs the model to return JSON — same contract as _call_llm().
-    Works offline with no API key. Configure via env vars:
-        OLLAMA_BASE_URL  (default: http://localhost:11434)
-        OLLAMA_MODEL     (default: llama3)
-        OLLAMA_TIMEOUT   (default: 120s — local models are slower)
-    """
     url  = f"{_OLLAMA_BASE_URL}/api/chat"
     body = {
         "model":    _OLLAMA_MODEL,
-        "format":   "json",          # request JSON output where supported
-        "stream":   False,           # single response, not streaming
+        "format":   "json",
+        "stream":   False,
         "options":  {"temperature": 0.1},
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -268,7 +237,6 @@ def _call_ollama(system_prompt: str, user_message: str) -> Optional[str]:
         )
         with urllib.request.urlopen(req, timeout=_OLLAMA_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())
-        # Ollama /api/chat response: { "message": { "content": "..." }, ... }
         return data["message"]["content"]
     except urllib.error.URLError as e:
         logger.error("Ollama not reachable at %s — is it running? (%s)", _OLLAMA_BASE_URL, e)
@@ -279,50 +247,6 @@ def _call_ollama(system_prompt: str, user_message: str) -> Optional[str]:
     except Exception as e:
         logger.error("Ollama call failed: %s", e)
     return None
-
-
-def extract_report_ollama(
-    text:        str,
-    report_type: str = "UNKNOWN",
-    sub_type:    str = "UNKNOWN",
-    gender:      str = "unknown",
-    language:    str = "en",
-) -> dict:
-    """
-    Extract a structured medical report using a local Ollama model.
-
-    Drop-in replacement for extract_report() — same return shape, same prompt.
-    Use this when:
-      • You want fully offline / air-gapped processing.
-      • You want to avoid Gemini API costs during development.
-      • You want to test a specific local model.
-
-    Returns the same dict shape as extract_report():
-        { summary, voice_explanation, tests_analysis, risk_level,
-          advice, raw_text, metadata }
-
-    Example:
-        from services.llm_extractor import extract_report_ollama
-        result = extract_report_ollama(raw_text, report_type="LAB", gender="female")
-    """
-    gender_hint  = f" Patient gender: {gender}." if gender != "unknown" else ""
-    user_message = (
-        f"Report type: {report_type} / {sub_type}.{gender_hint}\n\n"
-        f"Medical Report:\n{text}"
-        f"\n\nReturn ONLY a valid JSON object. No markdown. No text outside JSON."
-    )
-
-    raw    = _call_ollama(_build_prompt(language), user_message)
-    parsed = _parse_json(raw) if raw else None
-
-    if not parsed:
-        logger.warning(
-            "Ollama extraction failed for %s/%s (model: %s) — raw_text stored only",
-            report_type, sub_type, _OLLAMA_MODEL,
-        )
-        return _empty_report(report_type, sub_type, text, gender)
-
-    return _normalise_tests(parsed, report_type, sub_type, text, gender)
 
 
 def _parse_json(raw: str) -> Optional[dict]:
@@ -346,7 +270,6 @@ def _parse_json(raw: str) -> Optional[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _empty_report(report_type: str, sub_type: str, text: str, gender: str) -> dict:
-    """Fallback report when LLM is unavailable."""
     return {
         "summary":           "",
         "voice_explanation": "",
@@ -360,16 +283,11 @@ def _empty_report(report_type: str, sub_type: str, text: str, gender: str) -> di
 
 def _normalise_tests(parsed: dict, report_type: str, sub_type: str,
                      text: str, gender: str) -> dict:
-    """
-    Normalise raw LLM JSON into the canonical report dict.
-    Handles missing keys gracefully.
-    """
-    _VALID_STATUS   = {"Normal", "High", "Low", "Unknown"}
-    _VALID_RISK     = {"Low", "Medium", "High"}
+    _VALID_STATUS = {"Normal", "High", "Low", "Unknown"}
+    _VALID_RISK   = {"Low", "Medium", "High"}
 
     tests = []
     for item in parsed.get("tests_analysis", []):
-        # Normalise value — keep as float if possible, else string
         raw_val = item.get("value", "")
         try:
             value = float(str(raw_val).replace(",", "."))
@@ -405,6 +323,34 @@ def _normalise_tests(parsed: dict, report_type: str, sub_type: str,
     }
 
 
+def extract_report_ollama(
+    text:        str,
+    report_type: str = "UNKNOWN",
+    sub_type:    str = "UNKNOWN",
+    gender:      str = "unknown",
+    language:    str = "en",
+) -> dict:
+    truncated    = _truncate(text)
+    gender_hint  = f" Patient gender: {gender}." if gender != "unknown" else ""
+    user_message = (
+        f"Report type: {report_type} / {sub_type}.{gender_hint}\n\n"
+        f"Medical Report:\n{truncated}"
+        f"\n\nReturn ONLY a valid JSON object. No markdown. No text outside JSON."
+    )
+
+    raw    = _call_ollama(_build_prompt(language), user_message)
+    parsed = _parse_json(raw) if raw else None
+
+    if not parsed:
+        logger.warning(
+            "Ollama extraction failed for %s/%s (model: %s) — raw_text stored only",
+            report_type, sub_type, _OLLAMA_MODEL,
+        )
+        return _empty_report(report_type, sub_type, text, gender)
+
+    return _normalise_tests(parsed, report_type, sub_type, text, gender)
+
+
 def extract_report(
     text:        str,
     report_type: str = "UNKNOWN",
@@ -415,51 +361,26 @@ def extract_report(
     """
     Extract structured educational analysis from ANY medical report.
 
-    Works for LAB, IMAGING, CLINICAL, SPECIALIST, PATHOLOGY, ADMINISTRATIVE.
-    The same prompt is used for all types — each test/finding gets its own
-    detailed explanation entry in tests_analysis.
-
-    Always returns a valid dict. raw_text is always populated so downstream
-    steps (chatbot, RAG) always have content even if the LLM call fails.
-
-    Returns:
-        {
-            "summary":           str,
-            "voice_explanation": str,   # spoken-style paragraph for TTS/audio
-            "tests_analysis": [
-                {
-                    "test_name":           str,
-                    "value":               float | str,
-                    "unit":                str,
-                    "reference_range":     str,
-                    "status":              "Normal"|"High"|"Low"|"Unknown",
-                    "keyword_explanation": str,
-                    "result_explanation":  str,
-                }
-            ],
-            "risk_level":  "Low"|"Medium"|"High"|"Unknown",
-            "advice":      str,
-            "raw_text":    str,
-            "metadata":    { "gender": str, "confidence": "HIGH"|"LOW" }
-        }
-        Note: metadata is internal — consumed by pipeline, stripped from final output.
-        Set OLLAMA_ENABLED=true to route through local Ollama instead of Gemini.
+    KEY CHANGE: input text is truncated to _MAX_INPUT_CHARS before sending
+    to Gemini, dramatically reducing inference time for large reports.
+    The full raw_text is preserved in the returned dict for downstream use.
     """
-    # ── Ollama fast-path ──────────────────────────────────────────────────────
     if _OLLAMA_ENABLED:
         logger.debug("OLLAMA_ENABLED — routing to local model %s", _OLLAMA_MODEL)
         return extract_report_ollama(text, report_type=report_type,
                                      sub_type=sub_type, gender=gender, language=language)
 
-    # ── Gemini path ───────────────────────────────────────────────────────────
+    truncated    = _truncate(text)   # ← TRUNCATE before sending to API
     gender_hint  = f" Patient gender: {gender}." if gender != "unknown" else ""
     user_message = (
         f"Report type: {report_type} / {sub_type}.{gender_hint}\n\n"
-        f"Medical Report:\n{text}"
+        f"Medical Report:\n{truncated}"
     )
 
     prompt = _build_prompt(language)
-    raw = _call_llm(prompt, user_message)
+    raw    = _call_llm(prompt, user_message)
+
+    # Single retry with explicit JSON reminder (avoids second full prompt build)
     if raw is None:
         raw = _call_llm(prompt, user_message + "\n\nReturn ONLY a JSON object.")
 
@@ -478,10 +399,7 @@ def extract_lab_values(
     gender:            str = "unknown",
 ) -> list[dict]:
     """
-    Compatibility shim — extracts lab values from tests_analysis for callers
-    that still expect the old { test, value, unit, status } list shape.
-
-    Used by extractor.py LAB dispatcher and report_assembler.py.
+    Compatibility shim — extracts lab values from tests_analysis.
     Always returns [] on failure — never raises.
     """
     report = extract_report(text, report_type="LAB", gender=gender)
@@ -502,7 +420,7 @@ def extract_lab_values(
         try:
             value = float(str(raw_val).replace(",", "."))
         except (TypeError, ValueError):
-            continue   # skip non-numeric for lab_values compat list
+            continue
 
         status = _STATUS_MAP.get(item.get("status", "Unknown"), "UNKNOWN")
         results.append({
@@ -517,7 +435,7 @@ def extract_lab_values(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BACKWARD-COMPAT — called by extractor.py dispatcher (signatures unchanged)
+# BACKWARD-COMPAT
 # ══════════════════════════════════════════════════════════════════════════════
 
 def extract_with_llm(
@@ -526,14 +444,9 @@ def extract_with_llm(
     sub_type: str = "UNKNOWN",
     gender:   str = "unknown",
 ) -> Optional[list[dict]]:
-    """
-    Called by extractor.py for non-LAB categories.
-    Returns a single-element list wrapping the extract_report() dict,
-    or None on failure so extractor.py falls back to keyword extractor.
-    """
     report = extract_report(text, report_type=category, sub_type=sub_type, gender=gender)
     if report["metadata"]["confidence"] == "LOW":
-        return None  # triggers keyword fallback in extractor.py
+        return None
     return [{"result_type": category, **report}]
 
 
@@ -542,12 +455,11 @@ def extract_lab_with_llm(
     already_extracted: list | None = None,
     gender:            str = "unknown",
 ) -> list[dict]:
-    """Called by extractor.py LAB dispatcher as second-pass."""
     return extract_lab_values(text, already_extracted=already_extracted, gender=gender)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MULTI-SECTION — split mixed PDF, extract each section independently
+# SECTION SIGNALS
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SECTION_SIGNALS: dict[str, list[str]] = {
@@ -585,39 +497,25 @@ _SECTION_SIGNALS: dict[str, list[str]] = {
     ],
 }
 
-
-# Chunks shorter than this are treated as continuation fragments (header/footer
-# pages, page numbers, clinic logos etc.) and merged into the previous section.
 _MIN_CHUNK_CHARS = 300
 
-# Known page-break markers inserted by PDF extractors
 _PAGE_BREAK_PATTERNS = [
-    "\n\n--- PAGE BREAK ---\n\n",   # our own marker
-    "\f",                            # form-feed character (PyMuPDF, pdfminer)
-    "\x0c",                          # same as \f
+    "\n\n--- PAGE BREAK ---\n\n",
+    "\f",
+    "\x0c",
     "- - - PAGE - - -",
     "========== PAGE",
 ]
 
 
 def _normalise_page_breaks(text: str) -> str:
-    """
-    Replace all known page-break markers with a single blank line.
-    A single report spans multiple pages — page breaks are layout
-    artifacts and must NOT be used as report boundaries.
-    """
     for marker in _PAGE_BREAK_PATTERNS:
         text = text.replace(marker, "\n\n")
-    # Collapse 3+ consecutive blank lines into 2 (keeps paragraph spacing)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
 
 def _score_category(chunk: str) -> tuple[str, int]:
-    """
-    Score a text chunk against category keyword signals.
-    Returns (best_category, score). score=0 → UNKNOWN.
-    """
     lower  = chunk.lower()
     scores = {cat: sum(1 for sig in sigs if sig in lower)
               for cat, sigs in _SECTION_SIGNALS.items()}
@@ -626,20 +524,10 @@ def _score_category(chunk: str) -> tuple[str, int]:
 
 
 def split_by_category(text: str) -> dict[str, list[str]]:
-    """
-    Split mixed PDF text into per-category section lists.
-
-    Returns: { "LAB": ["section text", ...], "IMAGING": [...], ... }
-    Consecutive same-category chunks are merged automatically.
-    """
-
-    # NEW: Split text by page break
     pages = text.split("\n\n--- PAGE BREAK ---\n\n")
-
     result: dict[str, list[str]] = {}
 
     for page in pages:
-
         heading_re = re.compile(
             r'(?m)^[ \t]*'
             r'([A-Z][A-Z \-/]{2,50}'
@@ -648,15 +536,13 @@ def split_by_category(text: str) -> dict[str, list[str]]:
         )
 
         positions = [(m.start(), m.group()) for m in heading_re.finditer(page)]
-
         chunks: list[str] = []
 
         if len(positions) >= 2:
             if positions[0][0] > 0 and page[:positions[0][0]].strip():
                 chunks.append(page[:positions[0][0]].strip())
-
             for i, (start, _) in enumerate(positions):
-                end = positions[i + 1][0] if i + 1 < len(positions) else len(page)
+                end   = positions[i + 1][0] if i + 1 < len(positions) else len(page)
                 chunk = page[start:end].strip()
                 if chunk:
                     chunks.append(chunk)
@@ -664,7 +550,7 @@ def split_by_category(text: str) -> dict[str, list[str]]:
             chunks = [page.strip()] if page.strip() else []
 
         def _score(chunk: str) -> str:
-            lower = chunk.lower()
+            lower  = chunk.lower()
             scores = {c: sum(1 for s in sigs if s in lower)
                       for c, sigs in _SECTION_SIGNALS.items()}
             best, score = max(scores.items(), key=lambda x: x[1])
@@ -683,6 +569,42 @@ def split_by_category(text: str) -> dict[str, list[str]]:
     return result
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MULTI-SECTION — parallel extraction
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _process_section(
+    category:     str,
+    section_text: str,
+    sub_type:     str,
+    gender:       str,
+    language:     str,
+) -> dict:
+    """
+    Process a single section — called from a thread pool.
+    LAB sections also run regex-based lab_values extraction.
+    Returns the report dict (with lab_values key for LAB sections).
+    """
+    report = extract_report(
+        section_text, report_type=category,
+        sub_type=sub_type, gender=gender, language=language,
+    )
+
+    if category == "LAB":
+        try:
+            from services.extractor import extract_lab_results  # type: ignore
+            regex_hits  = extract_lab_results(section_text, gender=gender)
+            found_names = [r["test"] for r in regex_hits if "test" in r]
+            llm_hits    = extract_lab_values(
+                section_text, already_extracted=found_names, gender=gender,
+            )
+            report["lab_values"] = regex_hits + llm_hits
+        except Exception as e:
+            logger.error("LAB value extraction failed: %s", e)
+            report["lab_values"] = []
+
+    return report
+
 
 def extract_multi_section(
     sections:  dict[str, list[str]],
@@ -691,58 +613,56 @@ def extract_multi_section(
     language:  str = "en",
 ) -> dict[str, list[dict]]:
     """
-    Extract all sections from a mixed PDF.
-    Each section is processed with extract_report() independently,
-    then stored as a list under its category key.
+    Extract all sections from a mixed PDF **in parallel**.
 
-    LAB sections also get lab_values populated via regex + LLM.
+    Each (category, section_text) pair is submitted to a ThreadPoolExecutor
+    so multiple Gemini calls run concurrently instead of sequentially.
+    Wall-clock time drops from N*latency → ~max(latency per section).
 
-    Returns:
-        {
-          "LAB":     [ { report_type, sub_type, summary, findings, ..., lab_values }, ... ],
-          "IMAGING": [ { report_type, sub_type, summary, findings, ... }, ... ],
-          ...
+    Max workers capped at 5 to avoid hammering the Gemini rate limit.
+    Adjust via env var GEMINI_MAX_WORKERS.
+    """
+    sub_types   = sub_types or {}
+    max_workers = int(os.getenv("GEMINI_MAX_WORKERS", "5"))
+
+    # Build flat list of (category, idx, section_text) tasks
+    tasks: list[tuple[str, int, str]] = [
+        (category, idx, section_text)
+        for category, section_list in sections.items()
+        if category != "UNKNOWN"
+        for idx, section_text in enumerate(section_list)
+    ]
+
+    if not tasks:
+        return {}
+
+    # Submit all tasks concurrently
+    output: dict[str, list[dict | None]] = {}
+    for category, section_list in sections.items():
+        if category != "UNKNOWN":
+            output[category] = [None] * len(section_list)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_slot = {
+            pool.submit(
+                _process_section,
+                category, section_text,
+                sub_types.get(category, "UNKNOWN"),
+                gender, language,
+            ): (category, idx)
+            for category, idx, section_text in tasks
         }
 
-    Usage:
-        sections = split_by_category(raw_pdf_text)
-        results  = extract_multi_section(sections, gender="female")
+        for future in as_completed(future_to_slot):
+            category, idx = future_to_slot[future]
+            try:
+                output[category][idx] = future.result()
+            except Exception as e:
+                logger.error("Section %s[%d] failed: %s", category, idx, e)
+                output[category][idx] = _empty_report(
+                    category, sub_types.get(category, "UNKNOWN"), "", gender
+                )
 
-        # Flat list if needed:
-        all_sections = [r for cat in results.values() for r in cat]
-    """
-    sub_types = sub_types or {}
-    output: dict[str, list[dict]] = {}
-
-    for category, section_list in sections.items():
-        if category == "UNKNOWN":
-            continue
-
-        sub_type     = sub_types.get(category, "UNKNOWN")
-        cat_results: list[dict] = []
-
-        for idx, section_text in enumerate(section_list):
-            logger.debug("Processing %s section %d/%d", category, idx + 1, len(section_list))
-
-            report = extract_report(section_text, report_type=category,
-                                    sub_type=sub_type, gender=gender, language=language)
-
-            # LAB: attach structured lab_values from regex + LLM second-pass
-            if category == "LAB":
-                try:
-                    from services.extractor import extract_lab_results  # type: ignore
-                    regex_hits  = extract_lab_results(section_text, gender=gender)
-                    found_names = [r["test"] for r in regex_hits if "test" in r]
-                    llm_hits    = extract_lab_values(section_text,
-                                                     already_extracted=found_names,
-                                                     gender=gender)
-                    report["lab_values"] = regex_hits + llm_hits
-                except Exception as e:
-                    logger.error("LAB value extraction failed: %s", e)
-                    report["lab_values"] = []
-
-            cat_results.append(report)
-
-        output[category] = cat_results
-
-    return output
+    # Filter out any None slots (shouldn't happen, but defensive)
+    return {cat: [r for r in reports if r is not None]
+            for cat, reports in output.items()}
