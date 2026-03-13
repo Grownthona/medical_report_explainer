@@ -11,7 +11,8 @@ Design principle:
 
 Strategy (in order of confidence):
   1. PAGE BREAK boundaries  — strongest signal; each page that contains a
-     patient header is treated as a new patient record.
+     patient header is treated as a new patient record. Pages without a header
+     are treated as continuation pages and merged into the previous patient.
   2. Repeated header signals — "Name:", "Patient:", "Reg No:" etc. appearing
      more than once in flat text (no page breaks).
   3. No split needed        — return [text] as-is (single patient).
@@ -155,8 +156,10 @@ def split_patients(text: str) -> list[str]:
     Algorithm
     ---------
     1. Page-break split (highest confidence)
-       Split on _PAGE_BREAK markers. If >= 2 resulting pages each contain a
-       patient header, use this split. Merge short chunks (cover/footer pages).
+       Split on _PAGE_BREAK markers. Pages that contain a patient header open
+       a new patient chunk. Pages WITHOUT a header are continuation pages and
+       are appended to the current patient's chunk (fixes the 3-chunk bug where
+       a patient's data spans multiple pages).
 
     2. Header-position split (flat text, no page breaks)
        Find all positions where a patient-start pattern fires. Split there.
@@ -177,8 +180,27 @@ def split_patients(text: str) -> list[str]:
     if len(pages) >= 2:
         pages_with_header = [p for p in pages if _page_has_patient_header(p)]
         if len(pages_with_header) >= 2:
-            logger.info("split_patients: page-break strategy -> %d pages", len(pages))
-            chunks = [p.strip() for p in pages if p.strip()]
+            logger.info(
+                "split_patients: page-break strategy -> %d pages, %d with headers",
+                len(pages), len(pages_with_header),
+            )
+
+            chunks: list[str] = []
+            for page in pages:
+                if not page.strip():
+                    continue
+                if _page_has_patient_header(page):
+                    # This page opens a new patient record
+                    chunks.append(page.strip())
+                else:
+                    # Continuation page — belongs to the current patient
+                    if chunks:
+                        chunks[-1] = chunks[-1] + "\n\n" + page.strip()
+                    else:
+                        # Preamble before any patient header (clinic letterhead etc.)
+                        # Keep it so the first patient's extract_header() sees it
+                        chunks.append(page.strip())
+
             return _merge_short_chunks(chunks)
 
     # ── Strategy 2: repeated-header split in flat text ───────────────────────
