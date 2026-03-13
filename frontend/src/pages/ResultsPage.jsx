@@ -77,10 +77,10 @@ export default function ResultsPage({ data, language, onBack }) {
             {/* If there are multiple sections in the same category, we might want to map them */}
             {isMixed && Array.isArray(sections[activeTab]) ? (
               sections[activeTab].map((s, i) => (
-                <SectionPanel key={i} section={s} />
+                <SectionPanel key={i} section={s} language={language}/>
               ))
             ) : (
-              <SectionPanel section={activeSection} />
+              <SectionPanel section={activeSection} language={language}/>
             )}
           </div>
         )}

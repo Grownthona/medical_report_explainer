@@ -1,21 +1,26 @@
 import { useRef, useCallback } from "react";
 import "../styles/DropZone.css";
 
-export default function DropZone({ file, onFileChange }) {
+export default function DropZone({ files = [], onFileChange }) {
   const fileRef = useRef();
 
   const handleDrop = useCallback(
     (e) => {
       e.preventDefault();
-      const f = e.dataTransfer.files[0];
-      if (f) onFileChange(f);
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      if (droppedFiles.length) onFileChange(droppedFiles);
     },
     [onFileChange]
   );
 
+  const handleFileSelect = (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    if (selectedFiles.length) onFileChange(selectedFiles);
+  };
+
   return (
     <div
-      className={`dropzone ${file ? "dropzone-active" : ""}`}
+      className={`dropzone ${files.length ? "dropzone-active" : ""}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
       onClick={() => fileRef.current.click()}
@@ -23,22 +28,33 @@ export default function DropZone({ file, onFileChange }) {
       <input
         ref={fileRef}
         type="file"
+        multiple
         accept=".pdf,.jpg,.jpeg,.png,.webp"
         className="dropzone-input"
-        onChange={(e) => onFileChange(e.target.files[0])}
+        onChange={handleFileSelect}
       />
 
-      <div className="dropzone-icon">{file ? "📋" : "☁️"}</div>
+      <div className="dropzone-icon">{files.length ? "📋" : "☁️"}</div>
 
       <div className="dropzone-title">
-        {file ? file.name : "Drag & drop your medical report"}
+        {files.length
+          ? `${files.length} file(s) selected`
+          : "Drag & drop your medical reports"}
       </div>
+
+      {files.length > 0 && (
+        <ul className="dropzone-filelist">
+          {files.map((f, i) => (
+            <li key={i}>{f.name}</li>
+          ))}
+        </ul>
+      )}
 
       <div className="dropzone-subtitle">
-        PDF, JPG, PNG, WebP — up to 10 MB
+        PDF, JPG, PNG, WebP — up to 10 MB each
       </div>
 
-      {!file && <div className="dropzone-browse">Or browse files</div>}
+      {!files.length && <div className="dropzone-browse">Or browse files</div>}
     </div>
   );
 }

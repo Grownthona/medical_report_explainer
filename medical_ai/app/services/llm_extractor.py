@@ -74,7 +74,7 @@ For EACH test or finding:
 3) "unit": Unit of measurement.
 4) "reference_range": Normal range if provided.
 5) "status": MUST be one of: "Normal", "High", "Low", "Unknown" — always English.
-6) "keyword_explanation": In {lang["name"]} — what this test measures (1-2 lines).
+6) "keyword_explanation": In {lang["name"]} — what this test measures (2-3 lines).
 7) "result_explanation": In {lang["name"]} — what this patient's result means.
 
 STRICT RULES:

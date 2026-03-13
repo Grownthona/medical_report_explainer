@@ -127,3 +127,10 @@
   margin: 0;
   font-style: italic;
 }
+
+.voice-error {
+  color: #e55;
+  font-size: 0.8rem;
+  padding: 4px 12px;
+}
+

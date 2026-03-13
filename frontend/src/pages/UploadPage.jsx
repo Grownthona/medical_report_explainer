@@ -7,74 +7,91 @@ import "../styles/UploadPage.css";
 
 export default function UploadPage({ onAnalyze }) {
   const [tab, setTab] = useState("upload");
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
+
   const [pasteText, setPasteText] = useState("");
   const [language, setLanguage] = useState("en");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [selectedMock, setSelectedMock] = useState("SINGLE_REPORT_PROPER");
+  //const [selectedMock, setSelectedMock] = useState("SINGLE_REPORT_PROPER");
 
-  const hasContent = file || pasteText.trim();
+  const hasContent = files.length > 0 || pasteText.trim();
+
+  const handleFiles = (newFiles) => {
+    setFiles((prev) => {
+      const merged = [...prev, ...newFiles];
+
+      // remove duplicates
+      const unique = merged.filter(
+        (file, index, self) =>
+          index === self.findIndex((f) => f.name === file.name)
+      );
+
+      return unique;
+    });
+  };
 
   const handleAnalyze = async () => {
     // For testing, we use the selected mock data
-    setLoading(true);
-    setTimeout(() => {
-      onAnalyze(MOCK_SAMPLES["MULTIPLE_IMAGE_MIXED"], language);
-      setLoading(false);
-    }, 800);
-
-    // if (!hasContent || loading) return;
-
-    // setError(null);
     // setLoading(true);
-
-    // try {
-    //   let data;
-
-    //   if (tab === "upload" && file) {
-    //     const formData = new FormData();
-    //     formData.append("files", file);
-    //     formData.append("language", language);
-
-    //     const res = await fetch("http://127.0.0.1:8000/extract/file", {
-    //       method: "POST",
-    //       body: formData,
-    //     });
-
-    //     if (!res.ok) {
-    //       const err = await res.json().catch(() => ({}));
-    //       throw new Error(err.detail || `Server error: ${res.status}`);
-    //     }
-    //     console.log(res);
-    //     data = await res.json();
-
-    //   } else {
-    //     const formData = new FormData();
-    //     formData.append("text", pasteText);
-    //     formData.append("language", language);
-
-    //     const res = await fetch("http://127.0.0.1:8000/extract/text", {
-    //       method: "POST",
-    //       body: formData,
-    //     });
-
-    //     if (!res.ok) {
-    //       const err = await res.json().catch(() => ({}));
-    //       throw new Error(err.detail || `Server error: ${res.status}`);
-    //     }
-
-    //     data = await res.json();
-    //   }
-
-    //   onAnalyze(data, language);
-
-    // } catch (err) {
-    //   setError(err.message || "Something went wrong.");
-
-    // } finally {
+    // setTimeout(() => {
+    //   onAnalyze(MOCK_SAMPLES["MULTIPLE_IMAGE_MIXED"], language);
     //   setLoading(false);
-    // }
+    // }, 800);
+
+    if (!hasContent || loading) return;
+
+    setError(null);
+    setLoading(true);
+
+    try {
+      let data;
+
+      if (tab === "upload" && files) {
+        const formData = new FormData();
+        files.forEach((file) => {
+          formData.append("files", file);
+        });
+        formData.append("language", language);
+
+        const res = await fetch("http://127.0.0.1:8000/extract/file", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Server error: ${res.status}`);
+        }
+        console.log(res);
+        data = await res.json();
+
+      } else {
+        const formData = new FormData();
+        formData.append("text", pasteText);
+        formData.append("language", language);
+
+        const res = await fetch("http://127.0.0.1:8000/extract/text", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Server error: ${res.status}`);
+        }
+
+        data = await res.json();
+      }
+
+      onAnalyze(data, language);
+
+    } catch (err) {
+      setError(err.message || "Something went wrong.");
+
+    } finally {
+      setLoading(false);
+    }
     
   };
 
@@ -151,7 +168,7 @@ export default function UploadPage({ onAnalyze }) {
 
           {/* Input */}
           {tab === "upload" ? (
-            <DropZone file={file} onFileChange={setFile} />
+            <DropZone files={files} onFileChange={handleFiles} />
           ) : (
             <textarea
               value={pasteText}

@@ -91,7 +91,7 @@ export default function ChatBot({ patientData }) {
 
                 <div className="chatbot-status">
                   <div className="status-dot"></div>
-                  Online · Powered by Claude
+                  {/* Online · Powered by  */}
                 </div>
               </div>
             </div>
