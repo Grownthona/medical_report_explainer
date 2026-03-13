@@ -20,7 +20,15 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 -   **Modern UI**: Sleek, responsive frontend built with **React** and **Vite**.
 
 ---
+## 📸 Screenshots
 
+### Upload Page
+<img width="1920" height="1336" alt="screencapture-localhost-5173-2026-03-13-13_31_57" src="https://github.com/user-attachments/assets/c85b1dc8-4608-4a24-9849-b1fc95d481d7" />
+
+### AI Report Analysis
+<img width="1920" height="2011" alt="screencapture-localhost-5173-2026-03-13-14_15_34" src="https://github.com/user-attachments/assets/e9ed3fe1-cf42-4b25-9312-b11e8f5f6654" />
+
+---
 ## 🛠️ Tech Stack
 
 ### Backend (`medical_ai`)
