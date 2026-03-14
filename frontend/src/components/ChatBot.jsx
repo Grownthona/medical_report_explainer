@@ -1,6 +1,8 @@
 import "../styles/ChatBot.css";
 import { useState, useRef, useEffect } from "react";
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+
 export default function ChatBot({ patientData }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([
@@ -11,6 +13,7 @@ export default function ChatBot({ patientData }) {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -26,44 +29,43 @@ export default function ChatBot({ patientData }) {
 
     const userMsg = input.trim();
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", text: userMsg }]);
+    setError(null);
+
+    const updatedMessages = [...messages, { role: "user", text: userMsg }];
+    setMessages(updatedMessages);
     setLoading(true);
 
-    try {
-      const reportContext = JSON.stringify(patientData, null, 2);
+    // Build the history to send — skip the initial greeting (index 0)
+    const history = updatedMessages
+      .slice(1)
+      .map((m) => ({ role: m.role, content: m.text }));
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+    try {
+      const response = await fetch(`${API_BASE}/chat`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: `You are a friendly medical report explainer. You have access to the following patient report data:\n${reportContext}\n\nExplain medical terms in plain language. Be empathetic, clear, and always recommend consulting a doctor for medical decisions. Keep responses concise (2-4 sentences).`,
-          messages: [
-            ...messages
-              .filter((m, i) => !(m.role === "assistant" && i === 0))
-              .map((m) => ({
-                role: m.role,
-                content: m.text,
-              })),
-            { role: "user", content: userMsg },
-          ],
+          messages:     history,
+          patient_data: patientData ?? null,
+          language:     "en",
         }),
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail ?? `Server error ${response.status}`);
+      }
 
-      const reply =
-        data.content?.[0]?.text ||
-        "Sorry, I couldn't process that. Please try again.";
+      const data = await response.json();
+      const reply = data.reply ?? "Sorry, I couldn't process that. Please try again.";
 
       setMessages((prev) => [...prev, { role: "assistant", text: reply }]);
-    } catch {
+    } catch (err) {
+      const msg = err.message ?? "Connection error. Please try again.";
+      setError(msg);
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", text: "Connection error. Please try again." },
+        { role: "assistant", text: `⚠️ ${msg}` },
       ]);
     }
 
@@ -75,33 +77,21 @@ export default function ChatBot({ patientData }) {
   return (
     <>
       {/* SIDE PANEL */}
-      <div
-        className={`chatbot-panel ${
-          open ? "chatbot-open" : "chatbot-closed"
-        }`}
-      >
+      <div className={`chatbot-panel ${open ? "chatbot-open" : "chatbot-closed"}`}>
+
         {/* HEADER */}
         <div className="chatbot-header">
           <div className="chatbot-header-row">
             <div className="chatbot-title-group">
               <div className="chatbot-avatar">🩺</div>
-
               <div>
                 <div className="chatbot-title">MediBot</div>
-
                 <div className="chatbot-status">
                   <div className="status-dot"></div>
-                  {/* Online · Powered by  */}
                 </div>
               </div>
             </div>
-
-            <button
-              className="close-btn"
-              onClick={() => setOpen(false)}
-            >
-              ✕
-            </button>
+            <button className="close-btn" onClick={() => setOpen(false)}>✕</button>
           </div>
         </div>
 
@@ -110,19 +100,12 @@ export default function ChatBot({ patientData }) {
           {messages.map((m, i) => (
             <div
               key={i}
-              className={`message-row ${
-                m.role === "user" ? "message-user" : "message-bot"
-              }`}
+              className={`message-row ${m.role === "user" ? "message-user" : "message-bot"}`}
             >
-              {m.role === "assistant" && (
-                <div className="bot-avatar">🩺</div>
-              )}
-
+              {m.role === "assistant" && <div className="bot-avatar">🩺</div>}
               <div
                 className={`message ${
-                  m.role === "user"
-                    ? "message-user-bubble"
-                    : "message-bot-bubble"
+                  m.role === "user" ? "message-user-bubble" : "message-bot-bubble"
                 }`}
               >
                 {m.text}
@@ -133,7 +116,6 @@ export default function ChatBot({ patientData }) {
           {loading && (
             <div className="message-row message-bot">
               <div className="bot-avatar">🩺</div>
-
               <div className="message message-bot-bubble">
                 <div style={{ display: "flex", gap: 5 }}>
                   <div className="typing-dot"></div>
@@ -154,12 +136,9 @@ export default function ChatBot({ patientData }) {
               className="chatbot-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) =>
-                e.key === "Enter" && !e.shiftKey && sendMessage()
-              }
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
               placeholder="Ask about your results..."
             />
-
             <button
               className="send-btn"
               onClick={sendMessage}
@@ -168,13 +147,9 @@ export default function ChatBot({ patientData }) {
               ↑
             </button>
           </div>
-
-          <p className="disclaimer">
-            Always consult a doctor for medical decisions.
-          </p>
+          <p className="disclaimer">Always consult a doctor for medical decisions.</p>
         </div>
       </div>
-
       {/* FLOAT BUTTON */}
       <button
         className={`chatbot-fab ${open ? "fab-open" : "fab-closed"}`}
@@ -198,7 +173,13 @@ export default function ChatBot({ patientData }) {
             }}
           />
         )}
+        {error && (
+          <div className="error-toast">
+            <span>⚠ {error}</span>
+            <button onClick={() => setError(null)}>×</button>
+          </div>
+        )}
       </button>
-    </>
+    </> 
   );
 }

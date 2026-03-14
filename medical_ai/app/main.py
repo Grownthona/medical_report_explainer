@@ -13,6 +13,8 @@ from services.assembler        import assemble_report
 from services.xray_report      import XRayService
 from services.xray_narrator    import narrate_xray
 from services.tts_service      import TTSService
+from services.chat_service     import ChatService, ChatRequest, ChatResponse
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +36,7 @@ app.add_middleware(
 ocr_service  = OCRService()
 xray_service = XRayService()
 tts_service  = TTSService()
+chat_service = ChatService()
 
 SupportedLanguage = Literal["en", "bn", "ar", "hi", "ur"]
 _MAX_FILES        = 20
@@ -47,12 +50,30 @@ def _is_empty(text: str | None) -> bool:
 
 
 async def _handle_xray(file_bytes: bytes, language: str) -> dict:
-    predictions: list[dict] = xray_service.analyze(file_bytes)
-    narration:   dict       = narrate_xray(predictions, language=language)
+    result = xray_service.analyze(file_bytes)
+
+    if not result.get("success"):
+        raise RuntimeError("X-ray model returned unsuccessful result.")
+
+    # Normalize: extract the list and fix key/scale mismatches
+    # analyze() → {"condition": str, "probability": float (0–100)}
+    # narrate_xray() expects → {"label": str, "probability": float (0–1)}
+    predictions: list[dict] = [
+        {
+            "label":       f["condition"],
+            "probability": round(f["probability"] / 100, 4),
+        }
+        for f in result.get("findings", [])
+    ]
+
+    narration: dict = narrate_xray(predictions, language=language)
+
     return {
         "source":           "xray",
         "is_multi_patient": False,
         "language":         language,
+        "model":            result.get("model", ""),
+        "disclaimer":       result.get("disclaimer", ""),
         "xray": {
             "findings":          narration.get("findings",          ""),
             "predictions":       predictions,
@@ -193,6 +214,22 @@ async def text_to_speech(
     except Exception as e:
         logger.error("TTS failed: %s", e)
         raise HTTPException(status_code=500, detail=f"TTS failed: {e}")
+    
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTE 3 — CHATBOT (MediBot)
+# ══════════════════════════════════════════════════════════════════════════════
+ 
+@app.post(
+    "/chat",
+    response_model = ChatResponse,
+    summary        = "MediBot chat powered by OpenAI (via ChatService)",
+)
+async def chat(req: ChatRequest) -> ChatResponse:
+    try:
+        return await chat_service.chat(req)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+ 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEALTH CHECK
