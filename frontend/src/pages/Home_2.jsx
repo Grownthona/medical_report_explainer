@@ -6,6 +6,8 @@ import UploadMedicalFile from '../components/UploadMedicalFile';
 import TypingSummary from '../components/TypingSummary';
 import '../App.css'
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:5000";
+
 export default function Home() {
 
   
@@ -24,7 +26,7 @@ export default function Home() {
     files.forEach(file => formData.append("medicalFiles", file));
     try {
       const res = await axios.post(
-        "http://localhost:5000/api/upload/multiple",
+        `${API_BASE}/api/upload/multiple`,
         formData,
         { headers: { "Content-Type": "multipart/form-data" } }
       );

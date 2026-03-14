@@ -18,7 +18,8 @@ export default function VoiceExplainer({ text, language = "en" }) {
       form.append("text", text);
       form.append("language", language);
 
-      const res  = await fetch("http://localhost:8000/tts", { method: "POST", body: form });
+      const VITE_API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+      const res  = await fetch(`${VITE_API_BASE}/tts`, { method: "POST", body: form });
       const data = await res.json();
 
       console.log("TTS response:", data);          // check shape

@@ -77,7 +77,19 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 -   **Node.js** (v18 or higher)
 -   **Tesseract OCR** (Required for some fallback paths)
 
-### Backend Setup
+### Docker Deployment (Recommended)
+The easiest way to run the entire application is using Docker.
+
+1.  Make sure you have [Docker](https://www.docker.com/) and Docker Compose installed.
+2.  Run the following command in the project root:
+    ```bash
+    docker-compose up --build -d
+    ```
+3.  The application will be available at:
+    - **Frontend:** `http://localhost`
+    - **Backend API:** `http://localhost:8000`
+
+### Local Backend Setup
 1.  Navigate to the backend directory:
     ```bash
     cd medical_ai
@@ -97,7 +109,7 @@ An AI-powered system designed to transform complex medical reports into easy-to-
     ```
     The API will be available at `http://localhost:8000`.
 
-### Frontend Setup
+### Local Frontend Setup
 1.  Navigate to the frontend directory:
     ```bash
     cd frontend

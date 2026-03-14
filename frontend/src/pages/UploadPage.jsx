@@ -6,6 +6,8 @@ import { LANGUAGES, FEATURE_PILLS } from "../utils/constants";
 import LoadingOverlay from "../components/LoadingOverlay";
 import "../styles/UploadPage.css";
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+
 export default function UploadPage({ onAnalyze }) {
   const [tab, setTab] = useState("upload");
   const [files, setFiles] = useState([]);
@@ -55,7 +57,7 @@ export default function UploadPage({ onAnalyze }) {
         });
         formData.append("language", language);
 
-        const res = await fetch("http://127.0.0.1:8000/extract/file", {
+        const res = await fetch(`${API_BASE}/extract/file`, {
           method: "POST",
           body: formData,
         });
@@ -72,7 +74,7 @@ export default function UploadPage({ onAnalyze }) {
         formData.append("text", pasteText);
         formData.append("language", language);
 
-        const res = await fetch("http://127.0.0.1:8000/extract/text", {
+        const res = await fetch(`${API_BASE}/extract/text`, {
           method: "POST",
           body: formData,
         });
