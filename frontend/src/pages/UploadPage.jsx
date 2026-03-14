@@ -2,7 +2,8 @@ import { useState } from "react";
 import Navbar from "../components/Navbar";
 import DropZone from "../components/DropZone";
 import { LANGUAGES, FEATURE_PILLS } from "../utils/constants";
-import { MOCK_SAMPLES } from "../data/mockData";
+//import { MOCK_SAMPLES } from "../data/mockData";
+import LoadingOverlay from "../components/LoadingOverlay";
 import "../styles/UploadPage.css";
 
 export default function UploadPage({ onAnalyze }) {
@@ -97,6 +98,7 @@ export default function UploadPage({ onAnalyze }) {
 
   return (
     <div className="upload-page">
+      <LoadingOverlay visible={loading} />  
       <Navbar />
 
       <div className="hero">

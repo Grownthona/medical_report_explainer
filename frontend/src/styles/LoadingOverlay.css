@@ -1,0 +1,153 @@
+/* ── Backdrop ─────────────────────────────────────────────── */
+.lo-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /* blurred dark overlay matching the app's dark navy theme */
+  background: rgba(6, 10, 22, 0.75);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  animation: lo-fade-in 0.3s ease both;
+}
+
+@keyframes lo-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Card ─────────────────────────────────────────────────── */
+.lo-card {
+  background: #0f1629;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 20px;
+  padding: 40px 44px 36px;
+  width: min(440px, 90vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  box-shadow:
+    0 0 0 1px rgba(99, 102, 241, 0.08),
+    0 24px 64px rgba(0, 0, 0, 0.6),
+    0 0 80px rgba(99, 102, 241, 0.08);
+
+  animation: lo-slide-up 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes lo-slide-up {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ── Icon ─────────────────────────────────────────────────── */
+.lo-icon {
+  font-size: 52px;
+  line-height: 1;
+  margin-bottom: 20px;
+  filter: drop-shadow(0 0 18px rgba(99, 102, 241, 0.45));
+  animation: lo-float 3s ease-in-out infinite;
+}
+
+@keyframes lo-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-6px); }
+}
+
+/* ── Text ─────────────────────────────────────────────────── */
+.lo-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #f0f4ff;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.lo-subtitle {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.875rem;
+  color: #64748b;
+  margin: 0 0 28px;
+  text-align: center;
+}
+
+/* ── Steps ────────────────────────────────────────────────── */
+.lo-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 28px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lo-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  color: #334155; /* dim by default */
+  transition: color 0.4s ease, opacity 0.4s ease;
+  opacity: 0.45;
+}
+
+.lo-step--active {
+  color: #cbd5e1;
+  opacity: 1;
+}
+
+.lo-step--done {
+  color: #64748b;
+  opacity: 0.7;
+}
+
+.lo-step-emoji {
+  font-size: 1rem;
+  width: 22px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.lo-step-label {
+  letter-spacing: 0.01em;
+}
+
+/* Active step label gets a subtle pulse */
+.lo-step--active .lo-step-label {
+  animation: lo-pulse-text 1.4s ease-in-out infinite;
+}
+
+@keyframes lo-pulse-text {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
+
+/* ── Progress bar ─────────────────────────────────────────── */
+.lo-progress-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(99, 102, 241, 0.15);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.lo-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6366f1, #818cf8, #38bdf8);
+  background-size: 200% 100%;
+  transition: width 0.25s ease;
+  animation: lo-shimmer 2s linear infinite;
+}
+
+@keyframes lo-shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
