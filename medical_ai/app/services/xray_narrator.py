@@ -64,6 +64,7 @@ Your job is to turn these into a clear, patient-friendly explanation.
 
 Return ONLY a valid JSON object with this exact structure:
 {{
+  "section_title":     "Short English title of this report section (e.g. Xray Findings)"
   "findings":          "Clinical-style summary of what the X-ray analysis detected. Mention significant findings by name with their likelihood. Keep it factual and neutral.",
   "voice_explanation": "Spoken-style paragraph for reading aloud to the patient. 3-5 sentences. Use simple everyday language. Name significant findings naturally. End with a calm reassuring next step. Do NOT say 'your report shows' — speak directly.",
   "advice":            "Safe general advice. Always recommend consulting a doctor for any significant findings. Do NOT diagnose or prescribe."
@@ -135,6 +136,7 @@ def _parse_narration(raw: Optional[str]) -> Optional[dict]:
             return None
 
     return {
+        "section_title":     str(parsed.get("section_title",     "")).strip(),
         "findings":          str(parsed.get("findings",          "")).strip(),
         "voice_explanation": str(parsed.get("voice_explanation", "")).strip(),
         "advice":            str(parsed.get("advice",            "")).strip(),
@@ -202,6 +204,7 @@ def _fallback_narration(predictions: list[dict], language: str) -> dict:
         )
 
     return {
+        "section_title":    "Xray Finding",
         "findings":          findings,
         "voice_explanation": voice,
         "advice":            (

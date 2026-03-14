@@ -69,6 +69,11 @@ Every text field MUST be in {lang["name"]}. Exceptions: numeric values, units, a
 status values ("Normal", "High", "Low", "Unknown") which stay in English.
 
 TASK: Analyze the medical report and return structured JSON.
+Identify the section or report type from the document context (e.g. "Dental Findings",
+"CBCT Scan Overview", "Blood Test Results") and set it as "section_title".
+Each section title should be unique.
+If the document has a clear test category or specialist area, use that as the title.
+
 For EACH test or finding:
 1) "test_name": Name of the test.
 2) "value": Measured value (number if possible, else string).
@@ -87,6 +92,7 @@ VOICE EXPLANATION: A short spoken paragraph (3-5 sentences) in {lang["name"]} fo
 
 Return ONLY this JSON:
 {{
+  "section_title": "Short unique English title of this report section of this report about (e.g. Dental Impact Evaluation, Radicular Cyst - lower left, Radicular Reference & disclaimer)",
   "summary": "Overall explanation in {lang["name"]}",
   "voice_explanation": "Spoken paragraph in {lang["name"]}",
   "tests_analysis": [
@@ -207,6 +213,7 @@ def _normalise_tests(parsed: dict, report_type: str, sub_type: str,
         risk = "Unknown"
 
     return {
+        "section_title":     str(parsed.get("section_title","")).strip(),
         "summary":           str(parsed.get("summary",           "")).strip(),
         "voice_explanation": str(parsed.get("voice_explanation", "")).strip(),
         "tests_analysis":    tests,

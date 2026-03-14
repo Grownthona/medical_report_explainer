@@ -151,7 +151,7 @@ export default function ChatBot({ patientData }) {
         </div>
       </div>
       {/* FLOAT BUTTON */}
-      {/* <button
+      <button
         className={`chatbot-fab ${open ? "fab-open" : "fab-closed"}`}
         onClick={() => setOpen((v) => !v)}
       >
@@ -179,7 +179,7 @@ export default function ChatBot({ patientData }) {
             <button onClick={() => setError(null)}>×</button>
           </div>
         )}
-      </button> */}
+      </button>
     </> 
   );
 }

@@ -3,12 +3,24 @@ import { RISK_CONFIG } from "../utils/constants";
 import TestCard from "./TestCard";
 import VoiceExplainer from "./VoiceExplainer";
 
-export default function SectionPanel({ key, section, language }) {
+export default function SectionPanel({ sectionIndex, section, language }) {
   const risk = RISK_CONFIG[section.risk_level] || RISK_CONFIG.Low;
 
   return (
-    <div key={key}>
-      <h1>Report {key}</h1>
+    <div key={sectionIndex}>
+      
+      {/* ── Section title header ── */}
+
+      <div className="section-title-header">
+        <p className="section-index-label">Report</p>
+        <div className="section-title-row">
+          <div className="section-number">{sectionIndex + 1}</div>
+          <div className="section-vline" />
+          <h2 className="section-title-text">
+            {section.section_title || "Report"}
+          </h2>
+        </div>
+      </div>
       {/* Voice Explainer Section */}
       {section.voice_explanation && (
         <VoiceExplainer text={section.voice_explanation} lang={language}/>

@@ -74,13 +74,12 @@ export default function ResultsPage({ data, language, onBack }) {
 
         {activeSection && (
           <div key={`${activePatientIndex}-${activeTab}`}>
-            {/* If there are multiple sections in the same category, we might want to map them */}
             {isMixed && Array.isArray(sections[activeTab]) ? (
               sections[activeTab].map((s, i) => (
-                <SectionPanel key={i} section={s} language={language}/>
+                <SectionPanel key={i} sectionIndex={i} section={s} language={language} />
               ))
             ) : (
-              <SectionPanel section={activeSection} language={language}/>
+              <SectionPanel sectionIndex={0} section={activeSection} language={language} />
             )}
           </div>
         )}

@@ -228,6 +228,7 @@
 }
 
 .fab-open {
+  display: none;
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.12);
   color: #64748b;

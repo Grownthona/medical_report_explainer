@@ -99,7 +99,7 @@ def _risk_from_regex(regex_hits: list[dict]) -> str:
 
 
 def _strip_internal_fields(report: dict) -> dict:
-    keep = {"summary", "voice_explanation", "tests_analysis", "risk_level", "advice", "raw_text"}
+    keep = {"section_title", "summary", "voice_explanation", "tests_analysis", "risk_level", "advice", "raw_text"}
     return {k: v for k, v in report.items() if k in keep}
 
 
@@ -154,6 +154,7 @@ def _build_xray_section(xray_result: dict, language: str) -> dict:
     report    = assembled.get("report", {})
 
     return {
+        "section_title":     report.get("section_title",""),
         "summary":           report.get("summary",           ""),
         "voice_explanation": report.get("voice_explanation", ""),
         "tests_analysis":    report.get("tests_analysis",    []),
@@ -274,6 +275,7 @@ def _assemble_single(
         )
         merged_tests = _build_merged_tests(regex_hits, llm_report)
         report = {
+            "section_title":     llm_report.get("section_title",""),
             "summary":           llm_report.get("summary", ""),
             "voice_explanation": llm_report.get("voice_explanation", ""),
             "tests_analysis":    merged_tests,
@@ -289,6 +291,7 @@ def _assemble_single(
                              gender=header.gender, language=language)
         raw_report = extracted if isinstance(extracted, dict) else {}
         report     = _strip_internal_fields(raw_report) or {
+            "section_title":     "",
             "summary":           "",
             "voice_explanation": "",
             "tests_analysis":    [],

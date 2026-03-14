@@ -643,6 +643,7 @@ def assemble_xray_report(result: dict, language: str = "en") -> dict:
         },
 
         "report": {
+            "section_title":     narration.get("section_title",""),
             "summary":           narration.get("findings", ""),
             "voice_explanation": narration.get("voice_explanation", ""),
             "tests_analysis":    tests_analysis,
