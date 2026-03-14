@@ -5,11 +5,14 @@ from typing import Literal, List
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 
 from services.ocr_service      import OCRService
 from services.assembler        import assemble_report
 from services.xray_report      import XRayService
 from services.xray_narrator    import narrate_xray
+from services.tts_service      import TTSService
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +33,7 @@ app.add_middleware(
 
 ocr_service  = OCRService()
 xray_service = XRayService()
+tts_service  = TTSService()
 
 SupportedLanguage = Literal["en", "bn", "ar", "hi", "ur"]
 _MAX_FILES        = 20
@@ -175,6 +179,20 @@ async def extract_from_text(
         logger.error("Report assembly failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Report assembly failed: {e}")
 
+
+@app.post("/tts", summary="Convert text to speech")
+async def text_to_speech(
+    text:     str = Form(...),
+    language: SupportedLanguage = Form(default="en"),
+):
+    if _is_empty(text):
+        raise HTTPException(status_code=422, detail="Text too short.")
+    try:
+        audio_b64 = tts_service.synthesize(text, language=language)
+        return JSONResponse({"audio_base64": audio_b64, "format": "mp3"})
+    except Exception as e:
+        logger.error("TTS failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"TTS failed: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEALTH CHECK

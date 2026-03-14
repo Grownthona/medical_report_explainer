@@ -1,30 +1,59 @@
 import { useState, useRef, useEffect } from "react";
 import "../styles/VoiceExplainer.css";
 
-export default function VoiceExplainer({ text }) {
+export default function VoiceExplainer({ text, language = "en" }) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress]   = useState(0);
+  const [loading, setLoading]     = useState(false);
+  const audioRef  = useRef(null);
   const scrollRef = useRef(null);
 
-  // Simulate audio progress for visual effect since we don't have real audio files
-  useEffect(() => {
-    let interval;
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setProgress((prev) => {
-          if (prev >= 100) {
-            setIsPlaying(false);
-            return 0;
-          }
-          return prev + 1;
-        });
-      }, 100);
+  // Clean up on unmount
+  useEffect(() => () => audioRef.current?.pause(), []);
+
+  const fetchAndPlay = async () => {
+    setLoading(true);
+    try {
+      const form = new FormData();
+      form.append("text", text);
+      form.append("language", language);
+
+      const res  = await fetch("http://localhost:8000/tts", { method: "POST", body: form });
+      const data = await res.json();
+
+      console.log("TTS response:", data);          // check shape
+      console.log("audio_base64 preview:", data.audio_base64?.slice(0, 50));
+
+      // Decode base64 → Blob → Object URL
+      const base64Clean = data.audio_base64.replace(/\s/g, "");
+      const binary = atob(base64Clean);
+
+      const bytes  = new Uint8Array(binary.length).map((_, i) => binary.charCodeAt(i));
+      const blob   = new Blob([bytes], { type: "audio/mp3" });
+      const url    = URL.createObjectURL(blob);
+
+      const audio  = new Audio(url);
+      audioRef.current = audio;
+
+      audio.ontimeupdate = () =>
+        setProgress((audio.currentTime / audio.duration) * 100 || 0);
+
+      audio.onended = () => { setIsPlaying(false); setProgress(0); };
+
+      await audio.play();
+      setIsPlaying(true);
+    } catch (err) {
+      console.error("TTS error:", err);
+    } finally {
+      setLoading(false);
     }
-    return () => clearInterval(interval);
-  }, [isPlaying]);
+  };
 
   const togglePlay = () => {
-    setIsPlaying(!isPlaying);
+    const audio = audioRef.current;
+    if (!audio) { fetchAndPlay(); return; }
+    if (isPlaying) { audio.pause(); setIsPlaying(false); }
+    else           { audio.play();  setIsPlaying(true);  }
   };
 
   return (
@@ -39,16 +68,18 @@ export default function VoiceExplainer({ text }) {
                 height: isPlaying ? `${Math.random() * 20 + 10}px` : "10px",
                 transitionDelay: `${i * 0.1}s`,
               }}
-            ></div>
+            />
           ))}
         </div>
-        <button className="play-btn" onClick={togglePlay}>
-          {isPlaying ? "⏸" : "▶"}
+
+        <button className="play-btn" onClick={togglePlay} disabled={loading || !text}>
+          {loading ? "⏳" : isPlaying ? "⏸" : "▶"}
         </button>
+
         <div className="voice-title-container">
           <span className="voice-title">Voice Explainer</span>
           <div className="progress-track">
-            <div className="progress-bar" style={{ width: `${progress}%` }}></div>
+            <div className="progress-bar" style={{ width: `${progress}%` }} />
           </div>
         </div>
       </div>
