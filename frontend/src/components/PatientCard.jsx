@@ -1,6 +1,11 @@
 import "../styles/PatientCard.css";
 
 export default function PatientCard({ patient, summary = {} }) {
+
+  if (!patient || Object.keys(patient).length === 0) {
+    return <div className="patient-card">No patient data available</div>;
+  }
+
   const stats = [
     { label: "Total Tests", value: summary?.total_tests || 0, color: "#6366f1" },
     {
@@ -21,25 +26,25 @@ export default function PatientCard({ patient, summary = {} }) {
       <div className="patient-info">
         <div className="patient-label">Patient</div>
 
-        <div className="patient-name">{patient.name}</div>
+        <div className="patient-name">{patient?.name}</div>
 
         <div className="patient-meta">
-          {patient.age_years}y · {patient.gender} · {patient.collection_date}
+          {patient?.age_years}y · {patient?.gender} · {patient?.collection_date}
         </div>
       </div>
 
       {/* Stats */}
       <div className="patient-stats">
         {stats.map((s) => (
-          <div key={s.label} className="stat-box">
+          <div key={s?.label} className="stat-box">
             <div
               className="stat-value"
               style={{ color: s.color }}
             >
-              {s.value}
+              {s?.value}
             </div>
 
-            <div className="stat-label">{s.label}</div>
+            <div className="stat-label">{s?.label}</div>
           </div>
         ))}
       </div>

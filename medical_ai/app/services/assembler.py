@@ -9,6 +9,7 @@ from services.extractor        import extract, extract_lab_results
 from services.classifier       import classify, ClassificationResult
 from services.llm_extractor    import split_by_category, extract_multi_section, extract_report
 from services.patient_splitter import is_multi_patient, split_patients
+from services.xray_assembler   import assemble_xray_report
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +67,6 @@ def _merge_status(raw_status: str) -> str:
 
 
 def _build_merged_tests(regex_hits: list[dict], llm_report: dict) -> list[dict]:
-    """
-    Merge regex lab values (accurate numbers) with LLM tests_analysis
-    (explanations, reference_range). Regex wins on value/unit/status.
-    LLM-only tests appended at the end.
-    """
     llm_lookup: dict[str, dict] = {
         item["test_name"].lower(): item
         for item in llm_report.get("tests_analysis", [])
@@ -107,21 +103,13 @@ def _strip_internal_fields(report: dict) -> dict:
     return {k: v for k, v in report.items() if k in keep}
 
 
-# Fields that are internal pipeline data — never sent to the client
 _SECTION_STRIP = {"metadata", "raw_text", "regex_lab_values"}
 
 def _clean_section(section: dict) -> dict:
-    """Remove internal fields from a section before returning to client."""
     return {k: v for k, v in section.items() if k not in _SECTION_STRIP}
 
 
 def _collect_all_tests(multi_results: dict[str, list[dict]]) -> list[dict]:
-    """
-    Flatten tests_analysis from all sections.
-    For LAB sections, first applies _build_merged_tests so the client always
-    gets the regex-accurate values merged with LLM explanations.
-    Deduplicates by test_name.
-    """
     out:  list[dict] = []
     seen: set[str]   = set()
 
@@ -131,6 +119,7 @@ def _collect_all_tests(multi_results: dict[str, list[dict]]) -> list[dict]:
                 regex_hits = section.get("regex_lab_values", [])
                 tests      = _build_merged_tests(regex_hits, section)
             else:
+                # XRAY and all other sections: read tests_analysis directly
                 tests = section.get("tests_analysis", [])
 
             for item in tests:
@@ -143,22 +132,96 @@ def _collect_all_tests(multi_results: dict[str, list[dict]]) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# XRAY SECTION BUILDER
+# Converts assemble_xray_report() output into the same section shape
+# used by text sections so _collect_all_tests / _clean_section work uniformly.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_xray_section(xray_result: dict, language: str) -> dict:
+    """
+    Call assemble_xray_report() and reshape its report{} block into the
+    flat section shape used by multi-section text reports:
+
+        {
+            summary, voice_explanation, tests_analysis,
+            risk_level, advice, model, disclaimer, all_findings
+        }
+
+    This section is then stored under sections["XRAY"] — identical in
+    structure to sections["LAB"], sections["IMAGING"], etc.
+    """
+    assembled = assemble_xray_report(xray_result, language=language)
+    report    = assembled.get("report", {})
+
+    return {
+        "summary":           report.get("summary",           ""),
+        "voice_explanation": report.get("voice_explanation", ""),
+        "tests_analysis":    report.get("tests_analysis",    []),
+        "risk_level":        report.get("risk_level",        "Unknown"),
+        "advice":            report.get("advice",            ""),
+        # X-ray-specific extras — kept in section, not in tests_analysis
+        "model":             report.get("model",             ""),
+        "disclaimer":        report.get("disclaimer",        ""),
+        "all_findings":      report.get("all_findings",      []),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SINGLE-PATIENT CORE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _assemble_single(raw: str, language: str = "en") -> dict:
+def _assemble_single(
+    raw:         str,
+    language:    str        = "en",
+    xray_result: dict|None  = None,
+) -> dict:
+    """
+    Assemble a single-patient report.
+
+    xray_result: if provided, the X-ray findings are added as a XRAY section
+                 alongside whatever text sections the document contains.
+                 If raw is empty and xray_result is present the response is
+                 XRAY-only with sections: { "XRAY": [...] }.
+    """
+    has_text = bool(raw and raw.strip())
+    has_xray = xray_result is not None
+
+    # ── XRAY only (no text) ───────────────────────────────────────────────────
+    if has_xray and not has_text:
+        xray_section = _build_xray_section(xray_result, language)
+        all_tests    = xray_section.get("tests_analysis", [])
+        return {
+            "is_mixed":      False,
+            "document_type": {
+                "category":   "XRAY",
+                "sub_type":   "CHEST_XRAY",
+                "confidence": "HIGH",
+                "is_mixed":   False,
+            },
+            "patient":  {
+                "name": None, "age_years": None, "gender": "unknown",
+                "report_type": "Chest X-Ray", "collection_date": None,
+            },
+            "sections": {"XRAY": [xray_section]},
+            "summary":  _compute_summary(all_tests).to_dict(),
+        }
+
+    # ── Text pipeline ─────────────────────────────────────────────────────────
     header: PatientHeader = extract_header(raw, lab_results=None)
+    sections_map          = split_by_category(raw)
+    is_mixed              = len(sections_map) > 1 or has_xray  # xray forces mixed
 
-    sections_map = split_by_category(raw)
-    is_mixed     = len(sections_map) > 1
-
-    # ── PATH A: mixed (multiple categories in one document) ───────────────────
+    # ── PATH A: mixed — multiple text categories OR text + xray ──────────────
     if is_mixed:
         multi_results = extract_multi_section(
             sections_map, gender=header.gender, language=language
         )
 
-        # Collect merged tests for summary counts + report_type inference
+        # Inject XRAY section alongside the text sections
+        if has_xray:
+            xray_section = _build_xray_section(xray_result, language)
+            multi_results["XRAY"] = [xray_section]
+
         all_tests = _collect_all_tests(multi_results)
 
         lab_test_names = [
@@ -169,7 +232,9 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
         if lab_test_names:
             header.report_type = infer_report_type(lab_test_names)
 
-        # Strip internal fields from each section before returning
+        # Build category label — include XRAY in the display string if present
+        category_label = " + ".join(multi_results.keys())
+
         clean_sections = {
             cat: [_clean_section(s) for s in section_list]
             for cat, section_list in multi_results.items()
@@ -178,7 +243,7 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
         return {
             "is_mixed":      True,
             "document_type": {
-                "category":   " + ".join(multi_results.keys()),
+                "category":   category_label,
                 "sub_type":   "MIXED",
                 "confidence": "MEDIUM",
                 "is_mixed":   True,
@@ -188,7 +253,7 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
             "summary":  _compute_summary(all_tests).to_dict(),
         }
 
-    # ── PATH B: single-category ───────────────────────────────────────────────
+    # ── PATH B: single-category text (no xray) ────────────────────────────────
     classification: ClassificationResult = classify(raw)
 
     effective_sub = classification.sub_type
@@ -198,7 +263,6 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
     primary = classification.category.split(" + ")[0].strip().upper()
 
     if primary == "LAB":
-        # Regex pass (CPU, no network) + one LLM call
         regex_hits = extract_lab_results(raw, gender=header.gender)
         header.report_type = infer_report_type(
             [r["test"] for r in regex_hits if "test" in r]
@@ -253,29 +317,35 @@ def _assemble_single(raw: str, language: str = "en") -> dict:
 # PUBLIC API
 # ══════════════════════════════════════════════════════════════════════════════
 
-def assemble_report(raw: str, language: str = "en") -> dict:
-    """
-    Single entry point. Handles single-patient, multi-patient, and mixed docs.
+def assemble_report(
+    raw:         str        = "",
+    language:    str        = "en",
+    *,
+    xray_result: dict|None  = None,
+) -> dict:
+    
+    return _run_text_pipeline(raw, language, xray_result=xray_result)
 
-    Response — single patient, single category:
-        { is_multi_patient, is_mixed, document_type, patient, report, sections, summary }
 
-    Response — single patient, mixed categories:
-        { is_multi_patient, is_mixed, document_type, patient, sections, summary }
-        (no top-level report — read per-category data from sections)
+def _run_text_pipeline(
+    raw:         str,
+    language:    str,
+    xray_result: dict|None = None,
+) -> dict:
 
-    Response — multiple patients:
-        { is_multi_patient: true, total_patients, patients: [ ... ] }
-    """
     if is_multi_patient(raw):
-        chunks  = split_patients(raw)
-        logger.info("Multi-patient: %d chunks, processing in parallel", len(chunks))
+        chunks = split_patients(raw)
+        logger.info("Multi-patient: %d chunks", len(chunks))
 
         results: list[dict | None] = [None] * len(chunks)
 
         with ThreadPoolExecutor(max_workers=min(len(chunks), 5)) as pool:
             future_map = {
-                pool.submit(_assemble_single, chunk, language): idx
+                # Only pair xray_result with the first patient chunk
+                pool.submit(
+                    _assemble_single, chunk, language,
+                    xray_result if idx == 0 else None,
+                ): idx
                 for idx, chunk in enumerate(chunks)
             }
             for future in as_completed(future_map):
@@ -308,6 +378,6 @@ def assemble_report(raw: str, language: str = "en") -> dict:
             "patients":         [r for r in results if r is not None],
         })
 
-    result = _assemble_single(raw, language=language)
+    result = _assemble_single(raw, language=language, xray_result=xray_result)
     result["is_multi_patient"] = False
     return _to_serializable(result)

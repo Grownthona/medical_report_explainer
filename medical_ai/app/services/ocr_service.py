@@ -14,8 +14,9 @@ from fastapi import UploadFile, HTTPException
 
 logger = logging.getLogger(__name__)
 
-# Max parallel OCR workers (each PaddleOCR call is CPU-bound)
 _MAX_OCR_WORKERS = int(os.getenv("OCR_MAX_WORKERS", "4"))
+
+_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "application/pdf"}
 
 
 class OCRService:
@@ -43,12 +44,26 @@ class OCRService:
     # PUBLIC API
     # ══════════════════════════════════════════════════════════════════════════
 
+    def validate_file_type(self, content_type: str | None) -> None:
+        """
+        Public method — raises HTTPException 400 if content_type is not allowed.
+        Use this instead of the private _validate_type from outside this class.
+        """
+        if content_type not in _ALLOWED_CONTENT_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unsupported file type '{content_type}'. "
+                    f"Allowed: {', '.join(sorted(_ALLOWED_CONTENT_TYPES))}"
+                ),
+            )
+
     async def extract_text(self, file: UploadFile, file_bytes: bytes) -> str:
         """
-        Single-file entry point (unchanged signature — existing callers unaffected).
+        Single-file entry point.
         Returns extracted text string.
         """
-        self._validate_type(file.content_type)
+        self.validate_file_type(file.content_type)
         loop = asyncio.get_event_loop()
 
         if file.content_type == "application/pdf":
@@ -59,36 +74,20 @@ class OCRService:
     async def extract_text_multi(self, files: list[UploadFile]) -> str:
         """
         Multi-file entry point.
-
-        Reads all files, OCRs them in parallel (ThreadPoolExecutor), then joins
-        the per-file texts with PAGE BREAK markers so the rest of the pipeline
-        (patient splitting, section splitting, LLM extraction) sees one unified
-        text stream — exactly as if it had come from a single multi-page PDF.
-
-        File order is preserved in the output (file 0 text first, file N last).
-
-        Args:
-            files: list of UploadFile objects from the FastAPI multipart request.
-
-        Returns:
-            Single string with all files' text joined by PAGE BREAK markers.
+        Reads all files, OCRs them in parallel, joins with PAGE BREAK markers.
         """
         if not files:
             return ""
 
-        # ── Step 1: read all files concurrently (I/O bound) ──────────────────
         read_tasks = [file.read() for file in files]
         all_bytes: list[bytes] = await asyncio.gather(*read_tasks)
 
-        # Validate types after reading so we give a useful error
-        for file, content_type in zip(files, [f.content_type for f in files]):
-            self._validate_type(content_type)
+        for f in files:
+            self.validate_file_type(f.content_type)
 
-        # ── Step 2: OCR all files in parallel (CPU bound → thread pool) ──────
         loop = asyncio.get_event_loop()
 
         def _ocr_one(idx: int) -> tuple[int, str]:
-            """OCR a single file. Returns (original_index, text)."""
             content_type = files[idx].content_type
             file_bytes   = all_bytes[idx]
             filename     = files[idx].filename or f"file_{idx}"
@@ -101,7 +100,7 @@ class OCRService:
                 return idx, text
             except Exception as e:
                 logger.error("OCR failed for %s: %s", filename, e)
-                return idx, ""  # keep slot so order is preserved
+                return idx, ""
 
         with ThreadPoolExecutor(max_workers=min(len(files), _MAX_OCR_WORKERS)) as pool:
             futures = {pool.submit(_ocr_one, i): i for i in range(len(files))}
@@ -110,7 +109,6 @@ class OCRService:
                 idx, text = future.result()
                 results[idx] = text
 
-        # ── Step 3: join in original file order ───────────────────────────────
         ordered_texts = [results.get(i, "") for i in range(len(files))]
         combined = "\n\n--- PAGE BREAK ---\n\n".join(
             t for t in ordered_texts if t.strip()
@@ -154,13 +152,6 @@ class OCRService:
     # ══════════════════════════════════════════════════════════════════════════
 
     def _extract_from_pdf(self, pdf_bytes: bytes) -> str:
-        """
-        Extract text from PDF.
-        Tries direct text extraction first (fast, accurate for digital PDFs).
-        Falls back to image OCR for scanned pages.
-        Pages are joined with PAGE BREAK markers so the downstream splitter
-        can use them as patient/section boundaries.
-        """
         import pdfplumber
 
         text_pages = []
@@ -184,16 +175,17 @@ class OCRService:
 
     @staticmethod
     def _validate_type(content_type: str | None) -> None:
-        allowed = {"image/jpeg", "image/png", "application/pdf"}
-        if content_type not in allowed:
+        """Kept for backward compatibility — prefer validate_file_type()."""
+        if content_type not in _ALLOWED_CONTENT_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type '{content_type}'. "
-                       f"Allowed: {', '.join(sorted(allowed))}",
+                detail=(
+                    f"Unsupported file type '{content_type}'. "
+                    f"Allowed: {', '.join(sorted(_ALLOWED_CONTENT_TYPES))}"
+                ),
             )
 
     def sort_ocr_results(self, lines, line_threshold=10):
-        """Group boxes into rows, then sort left-to-right within each row."""
         sorted_lines = sorted(lines, key=lambda x: x[0][0][1])
         rows         = []
         current_row  = [sorted_lines[0]]
@@ -238,7 +230,6 @@ class OCRService:
         return cropped
 
     def _preprocess_image(self, image: bytes):
-        """Enhance image quality before OCR."""
         cropped_image = self.crop_remove_signature(image)
         cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)
         img           = Image.fromarray(cropped_image)
