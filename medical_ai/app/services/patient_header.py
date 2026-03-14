@@ -11,10 +11,10 @@ Extracts structured patient metadata from raw OCR text:
   - collection_date
 
 Strategy:
-  1. LLM extraction via Gemini — handles messy OCR, non-standard formats,
+  1. LLM extraction via OpenAI — handles messy OCR, non-standard formats,
      mixed-language headers (Bangla/English), clinic name leaking into name field.
   2. Regex fallback — for any field the LLM returned null/empty, or if
-     GEMINI_API_KEY is not set.
+     OPENAI_API_KEY is not set.
 
 Run this BEFORE clean_text() so noise stripping doesn't destroy header values.
 """
@@ -32,10 +32,10 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# ── Gemini config (shared with llm_extractor.py) ─────────────────────────────
-_GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-_MODEL           = os.getenv("GEMINI_MODEL",   "gemini-2.5-flash")
-_TIMEOUT         = int(os.getenv("GEMINI_TIMEOUT", "30"))
+# ── OpenAI config ─────────────────────────────────────────────────────────────
+_OPENAI_API_BASE = "https://api.openai.com/v1"
+_MODEL           = os.getenv("OPENAI_MODEL",   "gpt-4o-mini")
+_TIMEOUT         = int(os.getenv("OPENAI_TIMEOUT", "30"))
 
 
 # ─── Output model ─────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ def infer_report_type(lab_test_names: list[str]) -> Optional[str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LLM EXTRACTION
+# LLM EXTRACTION — OpenAI
 # ══════════════════════════════════════════════════════════════════════════════
 
 _HEADER_PROMPT = """You are a medical report parser specializing in patient header extraction.
@@ -120,30 +120,41 @@ RULES:
 - Return ONLY valid JSON. No markdown. No explanation. No extra keys."""
 
 
-def _call_gemini(user_message: str) -> Optional[str]:
-    """Call Gemini REST API. Returns raw text or None on failure."""
-    api_key = os.getenv("GEMINI_API_KEY", "")
+def _call_openai(user_message: str) -> Optional[str]:
+    """Call OpenAI Chat Completions API. Returns raw text or None on failure."""
+    api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
+        logger.warning("OPENAI_API_KEY not set — skipping LLM header extraction")
         return None
 
-    url  = f"{_GEMINI_API_BASE}/{_MODEL}:generateContent?key={api_key}"
+    url  = f"{_OPENAI_API_BASE}/chat/completions"
     body = {
-        "system_instruction": {"parts": [{"text": _HEADER_PROMPT}]},
-        "contents":           [{"role": "user", "parts": [{"text": user_message}]}],
-        "generationConfig":   {"temperature": 0.0, "responseMimeType": "application/json"},
+        "model":           _MODEL,
+        "temperature":     0.0,
+        "response_format": {"type": "json_object"},   # enforces clean JSON output
+        "messages": [
+            {"role": "system", "content": _HEADER_PROMPT},
+            {"role": "user",   "content": user_message},
+        ],
     }
     try:
         req = urllib.request.Request(
-            url, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"}, method="POST",
+            url,
+            data=json.dumps(body).encode(),
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
         )
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             result = json.loads(resp.read().decode())
-            parts  = result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-            return parts[0].get("text") if parts else None
+            return result["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        logger.warning("OpenAI HTTP %s: %s", e.code, e.read().decode(errors="replace"))
     except Exception as e:
-        logger.warning("Gemini header extraction failed: %s", e)
-        return None
+        logger.warning("OpenAI header extraction failed: %s", e)
+    return None
 
 
 def _parse_header_json(raw: Optional[str]) -> Optional[dict]:
@@ -167,13 +178,13 @@ def _parse_header_json(raw: Optional[str]) -> Optional[dict]:
 
 def _extract_header_llm(text: str) -> Optional[dict]:
     """
-    Extract patient header fields using Gemini LLM.
+    Extract patient header fields using OpenAI.
     Returns dict with keys: name, age_years, gender, collection_date,
     referred_by, lab_no, invoice_no — or None if LLM unavailable.
     """
     # Limit input to first ~1500 chars — header is always near the top
     user_message = f"Medical report (extract patient header info only):\n\n{text[:1500]}"
-    raw    = _call_gemini(user_message)
+    raw    = _call_openai(user_message)
     parsed = _parse_header_json(raw)
     if parsed is None:
         logger.warning("LLM header extraction failed — falling back to regex")
@@ -334,7 +345,7 @@ def extract_header(raw: str, lab_results: Optional[list] = None) -> PatientHeade
     """
     # ── Step 1: try LLM ───────────────────────────────────────────────────────
     llm = _extract_header_llm(raw)
-    
+
     # ── Step 2: extract each field — LLM first, regex fallback ───────────────
     # Name
     llm_name = (llm.get("name") or "").strip() if llm else ""

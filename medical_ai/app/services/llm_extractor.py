@@ -9,6 +9,7 @@ Key changes vs previous version:
   - lab_values key removed from section output — tests_analysis is the single
     source of truth. Assembler reads tests_analysis directly.
   - metadata and raw_text stripped from section output to reduce response size.
+  - LLM backend: OpenAI API (replaces Gemini + Ollama).
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-_MODEL           = os.getenv("GEMINI_MODEL",   "gemini-2.5-flash")
-_TIMEOUT         = int(os.getenv("GEMINI_TIMEOUT", "45"))
+_OPENAI_API_BASE = "https://api.openai.com/v1"
+_MODEL           = os.getenv("OPENAI_MODEL",   "gpt-4o-mini")
+_TIMEOUT         = int(os.getenv("OPENAI_TIMEOUT", "45"))
 _MAX_INPUT_CHARS = int(os.getenv("MAX_REPORT_CHARS", "4000"))
 
 
@@ -101,63 +102,49 @@ Return ONLY this JSON:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LLM CALLS
+# LLM CALLS — OpenAI
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _call_llm(system_prompt: str, user_message: str) -> Optional[str]:
-    api_key = os.getenv("GEMINI_API_KEY", "")
+    """Call OpenAI Chat Completions API."""
+    api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
-        logger.error("GEMINI_API_KEY not set")
+        logger.error("OPENAI_API_KEY not set")
         return None
-    url  = f"{_GEMINI_API_BASE}/{_MODEL}:generateContent?key={api_key}"
+
+    url  = f"{_OPENAI_API_BASE}/chat/completions"
     body = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents":           [{"role": "user", "parts": [{"text": user_message}]}],
-        "generationConfig":   {"temperature": 0.1, "responseMimeType": "application/json"},
-    }
-    try:
-        req = urllib.request.Request(
-            url, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode())
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except urllib.error.HTTPError as e:
-        logger.error("Gemini HTTP %s: %s", e.code, e.read().decode(errors="replace"))
-    except TimeoutError:
-        logger.error("Gemini timed out after %ss", _TIMEOUT)
-    except Exception as e:
-        logger.error("Gemini call failed: %s", e)
-    return None
-
-
-_OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-_OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL",    "llama3")
-_OLLAMA_TIMEOUT  = int(os.getenv("OLLAMA_TIMEOUT", "120"))
-_OLLAMA_ENABLED  = os.getenv("OLLAMA_ENABLED",  "false").lower() == "true"
-
-
-def _call_ollama(system_prompt: str, user_message: str) -> Optional[str]:
-    url  = f"{_OLLAMA_BASE_URL}/api/chat"
-    body = {
-        "model": _OLLAMA_MODEL, "format": "json", "stream": False,
-        "options": {"temperature": 0.1},
+        "model": _MODEL,
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},   # enforces JSON output
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},
         ],
     }
+
     try:
         req = urllib.request.Request(
-            url, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"}, method="POST",
+            url,
+            data=json.dumps(body).encode(),
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
         )
-        with urllib.request.urlopen(req, timeout=_OLLAMA_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())
-        return data["message"]["content"]
+        return data["choices"][0]["message"]["content"]
+
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode(errors="replace")
+        logger.error("OpenAI HTTP %s: %s", e.code, body_text)
+    except TimeoutError:
+        logger.error("OpenAI timed out after %ss", _TIMEOUT)
     except Exception as e:
-        logger.error("Ollama call failed: %s", e)
+        logger.error("OpenAI call failed: %s", e)
+
     return None
 
 
@@ -237,9 +224,6 @@ def extract_report(
     gender:      str = "unknown",
     language:    str = "en",
 ) -> dict:
-    if _OLLAMA_ENABLED:
-        return _extract_ollama(text, report_type, sub_type, gender, language)
-
     truncated   = _truncate(text)
     gender_hint = f" Patient gender: {gender}." if gender != "unknown" else ""
     user_msg    = f"Report type: {report_type} / {sub_type}.{gender_hint}\n\nMedical Report:\n{truncated}"
@@ -247,6 +231,7 @@ def extract_report(
 
     raw = _call_llm(prompt, user_msg)
     if raw is None:
+        # One retry with an extra nudge
         raw = _call_llm(prompt, user_msg + "\n\nReturn ONLY a JSON object.")
 
     parsed = _parse_json(raw) if raw else None
@@ -254,18 +239,6 @@ def extract_report(
         logger.warning("LLM unavailable for %s/%s", report_type, sub_type)
         return _empty_report(report_type, sub_type, text, gender)
 
-    return _normalise_tests(parsed, report_type, sub_type, text, gender)
-
-
-def _extract_ollama(text, report_type, sub_type, gender, language) -> dict:
-    truncated   = _truncate(text)
-    gender_hint = f" Patient gender: {gender}." if gender != "unknown" else ""
-    user_msg    = (f"Report type: {report_type} / {sub_type}.{gender_hint}\n\n"
-                   f"Medical Report:\n{truncated}\n\nReturn ONLY valid JSON.")
-    raw    = _call_ollama(_build_prompt(language), user_msg)
-    parsed = _parse_json(raw) if raw else None
-    if not parsed:
-        return _empty_report(report_type, sub_type, text, gender)
     return _normalise_tests(parsed, report_type, sub_type, text, gender)
 
 
@@ -393,7 +366,7 @@ def split_by_category(text: str) -> dict[str, list[str]]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MULTI-SECTION — parallel, one LLM call per section, no duplicate lab pass
+# MULTI-SECTION — parallel, one LLM call per section
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _process_section(
@@ -404,19 +377,8 @@ def _process_section(
     language:     str,
 ) -> dict:
     """
-    One LLM call per section. That's it.
-
-    REMOVED: the second LLM call that extract_lab_values() was making for LAB
-    sections. The regex pass (extract_lab_results) is still run to get accurate
-    values/units/status, but it's CPU-only — no network cost.
-
-    The assembler merges regex hits with LLM tests_analysis via _build_merged_tests.
-    lab_values is no longer stored in the section dict — it was a redundant
-    flattened copy of tests_analysis.
-
-    Returns a lean section dict:
-        { summary, voice_explanation, tests_analysis, risk_level, advice,
-          metadata, raw_text, regex_lab_values (LAB only) }
+    One LLM call per section.
+    For LAB sections a CPU-only regex pass is also run (zero network cost).
     """
     report = extract_report(
         section_text, report_type=category,
@@ -426,9 +388,7 @@ def _process_section(
     if category == "LAB":
         try:
             from services.extractor import extract_lab_results
-            # CPU-only regex pass — zero network cost
             regex_hits = extract_lab_results(section_text, gender=gender)
-            # Store under a distinct key so assembler can merge without confusion
             report["regex_lab_values"] = regex_hits
         except Exception as e:
             logger.error("Regex LAB extraction failed: %s", e)
@@ -443,13 +403,9 @@ def extract_multi_section(
     sub_types: dict[str, str] | None = None,
     language:  str = "en",
 ) -> dict[str, list[dict]]:
-    """
-    Extract all sections in parallel — one LLM call per section, no more.
-    Previously LAB sections made 2 LLM calls (extract_report + extract_lab_values).
-    Now it's always exactly 1.
-    """
+    """Extract all sections in parallel — one LLM call per section."""
     sub_types   = sub_types or {}
-    max_workers = int(os.getenv("GEMINI_MAX_WORKERS", "5"))
+    max_workers = int(os.getenv("OPENAI_MAX_WORKERS", "5"))
 
     tasks: list[tuple[str, int, str]] = [
         (cat, idx, text)
