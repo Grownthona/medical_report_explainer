@@ -232,6 +232,11 @@ def extract_report(
     language:    str = "en",
 ) -> dict:
     truncated   = _truncate(text)
+    if len(truncated) < len(text):
+        logger.warning(
+            "Report truncated from %d to %d chars — "
+            "consider splitting before extraction", len(text), len(truncated)
+        )
     gender_hint = f" Patient gender: {gender}." if gender != "unknown" else ""
     user_msg    = f"Report type: {report_type} / {sub_type}.{gender_hint}\n\nMedical Report:\n{truncated}"
     prompt      = _build_prompt(language)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
@@ -66,29 +67,70 @@ def _merge_status(raw_status: str) -> str:
     return "Unknown"
 
 
+def _normalise_test_name(name: str) -> str:
+    """Strip parenthetical aliases and common suffixes for matching."""
+    name = name.lower().strip()
+    name = re.sub(r'\s*\(.*?\)', '', name)          # remove "(Good)", "(SGPT)" etc.
+    name = re.sub(r'\b(total|serum|fasting)\b', '', name)
+    return name.strip()
+
+# def _build_merged_tests(regex_hits: list[dict], llm_report: dict) -> list[dict]:
+#     # Build lookup with BOTH exact and normalised keys
+#     llm_lookup: dict[str, dict] = {}
+#     for item in llm_report.get("tests_analysis", []):
+#         exact = item["test_name"].lower()
+#         norm  = _normalise_test_name(item["test_name"])
+#         llm_lookup[exact] = item
+#         llm_lookup[norm]  = item          # second key for fuzzy matching
+
+#     merged = []
+#     seen_norm: set[str] = set()           # ← track normalised names to skip dupes
+
+#     for r in regex_hits:
+#         name = r.get("test", "")
+#         norm = _normalise_test_name(name)
+#         if norm in seen_norm:
+#             continue
+#         seen_norm.add(norm)
+
+#         llm_row = llm_lookup.get(name.lower()) or llm_lookup.get(norm, {})
+
+#         # ↓ Replace the old single "status" line with these two lines:
+#         llm_status = llm_row.get("status", "")
+#         has_ref    = bool(llm_row.get("reference_range", "").strip())
+#         status     = llm_status if (has_ref and llm_status) else _merge_status(r.get("status", "Unknown"))
+
+#         merged.append({
+#             "test_name":           name,
+#             "value":               r.get("value", ""),
+#             "unit":                r.get("unit", ""),
+#             "reference_range":     llm_row.get("reference_range", ""),
+#             "status":              status,   # ← use the variable, not _merge_status() inline
+#             "keyword_explanation": llm_row.get("keyword_explanation", ""),
+#             "result_explanation":  llm_row.get("result_explanation", ""),
+#         })
+
+#     regex_names_norm = {_normalise_test_name(r.get("test", "")) for r in regex_hits}
+#     for item in llm_report.get("tests_analysis", []):
+#         if _normalise_test_name(item.get("test_name", "")) not in regex_names_norm:
+#             merged.append(item)
+
+#     return merged
+
 def _build_merged_tests(regex_hits: list[dict], llm_report: dict) -> list[dict]:
-    llm_lookup: dict[str, dict] = {
-        item["test_name"].lower(): item
-        for item in llm_report.get("tests_analysis", [])
-    }
     merged = []
-    for r in regex_hits:
-        name    = r.get("test", "")
-        llm_row = llm_lookup.get(name.lower(), {})
-        merged.append({
-            "test_name":           name,
-            "value":               r.get("value", ""),
-            "unit":                r.get("unit", ""),
-            "reference_range":     llm_row.get("reference_range", ""),
-            "status":              _merge_status(r.get("status", "Unknown")),
-            "keyword_explanation": llm_row.get("keyword_explanation", ""),
-            "result_explanation":  llm_row.get("result_explanation", ""),
-        })
-    regex_names = {r.get("test", "").lower() for r in regex_hits}
     for item in llm_report.get("tests_analysis", []):
-        if item.get("test_name", "").lower() not in regex_names:
-            merged.append(item)
+        merged.append({
+            "test_name":           item.get("test_name", ""),
+            "value":               item.get("value", ""),
+            "unit":                item.get("unit", ""),
+            "reference_range":     item.get("reference_range", ""),
+            "status":              item.get("status", ""),
+            "keyword_explanation": item.get("keyword_explanation", ""),
+            "result_explanation":  item.get("result_explanation", ""),
+        })
     return merged
+
 
 
 def _risk_from_regex(regex_hits: list[dict]) -> str:
