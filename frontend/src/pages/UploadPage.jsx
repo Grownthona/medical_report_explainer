@@ -16,7 +16,6 @@ export default function UploadPage({ onAnalyze }) {
   const [language, setLanguage] = useState("en");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  //const [selectedMock, setSelectedMock] = useState("SINGLE_REPORT_PROPER");
 
   const hasContent = files.length > 0 || pasteText.trim();
 
@@ -24,7 +23,6 @@ export default function UploadPage({ onAnalyze }) {
     setFiles((prev) => {
       const merged = [...prev, ...newFiles];
 
-      // remove duplicates
       const unique = merged.filter(
         (file, index, self) =>
           index === self.findIndex((f) => f.name === file.name)
@@ -35,13 +33,6 @@ export default function UploadPage({ onAnalyze }) {
   };
 
   const handleAnalyze = async () => {
-    // For testing, we use the selected mock data
-    // setLoading(true);
-    // setTimeout(() => {
-    //   onAnalyze(MOCK_SAMPLES["MULTIPLE_IMAGE_MIXED"], language);
-    //   setLoading(false);
-    // }, 800);
-
     if (!hasContent || loading) return;
 
     setError(null);
@@ -66,9 +57,8 @@ export default function UploadPage({ onAnalyze }) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.detail || `Server error: ${res.status}`);
         }
-        console.log(res);
-        data = await res.json();
 
+        data = await res.json();
       } else {
         const formData = new FormData();
         formData.append("text", pasteText);
@@ -88,57 +78,28 @@ export default function UploadPage({ onAnalyze }) {
       }
 
       onAnalyze(data, language);
-
     } catch (err) {
       setError(err.message || "Something went wrong.");
-
     } finally {
       setLoading(false);
     }
-    
   };
 
   return (
     <div className="upload-page">
-      <LoadingOverlay visible={loading} />  
+      <LoadingOverlay visible={loading} />
       <Navbar />
 
       <div className="hero">
-        <div className="badge">
-          ✦ AI-POWERED MEDICAL TRANSLATOR
-        </div>
+        <div className="badge">✦ AI-POWERED MEDICAL TRANSLATOR</div>
 
         <h1 className="hero-title">
           Understand Your
           <br />
-          <span className="gradient">
-            Medical Report
-          </span>
+          <span className="gradient">Medical Report</span>
           <br />
           In Plain Language
         </h1>
-
-        {/* Mock Selector for Testing
-        <div style={{ marginTop: 20, display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <span style={{ color: '#94a3b8', fontSize: 12 }}>TEST MOCK:</span>
-          {Object.keys(MOCK_SAMPLES).map(key => (
-            <button
-              key={key}
-              onClick={() => setSelectedMock(key)}
-              style={{
-                fontSize: 10,
-                padding: '4px 8px',
-                borderRadius: 4,
-                border: '1px solid #6366f1',
-                background: selectedMock === key ? '#6366f1' : 'transparent',
-                color: selectedMock === key ? 'white' : '#6366f1',
-                cursor: 'pointer'
-              }}
-            >
-              {key}
-            </button>
-          ))}
-        </div> */}
 
         <p className="hero-sub" style={{ marginTop: 20 }}>
           Upload any medical report — PDF, image, or text — and get an instant,
@@ -184,7 +145,6 @@ export default function UploadPage({ onAnalyze }) {
 
           {/* Footer */}
           <div className="upload-footer">
-
             <div className="language-select">
               <span>🌐 Language</span>
 
@@ -192,9 +152,9 @@ export default function UploadPage({ onAnalyze }) {
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
               >
-                {LANGUAGES.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
+                {Object.entries(LANGUAGES).map(([name, code]) => (
+                  <option key={code} value={code}>
+                    {name}
                   </option>
                 ))}
               </select>
@@ -218,7 +178,6 @@ export default function UploadPage({ onAnalyze }) {
           )}
 
         </div>
-
       </div>
     </div>
   );

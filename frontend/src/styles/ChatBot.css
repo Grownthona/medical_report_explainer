@@ -84,7 +84,13 @@
 .close-btn {
   width: 32px;
   height: 32px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  position: static;
   border-radius: 8px;
+  padding-bottom: 30px;
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.1);
   color: #64748b;
