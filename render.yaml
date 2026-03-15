@@ -21,9 +21,8 @@ services:
         value: "false"
 
   # React Frontend
-  - type: static_site
+  - type: static
     name: medical-report-explainer
-    runtime: static
 
     publishPath: ./frontend/dist
     buildCommand: cd frontend && npm install && npm run build
