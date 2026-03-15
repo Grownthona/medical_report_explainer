@@ -29,9 +29,9 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 
 ## 🌟 Key Features
 
--   **Multi-Format OCR**: Extracts text from PDFs and images (JPG, PNG) using **PaddleOCR**.
+-   **Multi-Format OCR**: Extracts text from PDFs and images (JPG, PNG) using **Tesseract OCR**.
 -   **Intelligent Analysis**:
-    -   **NER / LLM Pipeline**: Specifically tuned for medical reports.
+    -   **Hybrid Pipeline**: High-accuracy deterministic extraction for **Lab Results** (Regex) combined with LLM-based insights for **Clinical/Imaging** reports.
     -   **Lab Result Extraction**: Accurate extraction of test names, values, units, and status (Normal/High/Low).
     -   **Report Categorization**: Automatically identifies report types (Hematology, Biochemistry, etc.).
 -   **X-Ray Vision**: Dedicated analysis for X-ray images using **TorchXrayVision**, providing findings and advice.
@@ -51,7 +51,7 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 
 ### Backend (`medical_ai`)
 -   **Framework**: [FastAPI](https://fastapi.tiangolo.com/)
--   **OCR**: [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
+-   **OCR**: [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
 -   **NLP**: [spaCy](https://spacy.io/)
 -   **Explaining/Extraction**: LLM-based processing (pipeline-ready)
 -   **X-Ray Analysis**: [TorchXrayVision](https://github.com/mlmed/torchxrayvision), PyTorch
@@ -93,6 +93,7 @@ Create a `.env` file in the root directory (based on `.env.example`):
 | Variable | Description | Required |
 | :--- | :--- | :--- |
 | `OPENAI_API_KEY` | Your OpenAI API key for report analysis. | Yes |
+| `OPENAI_MODEL` | Specific OpenAI model (default: `gpt-4o-mini`). | Optional |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google Cloud JSON key (for Text-to-Speech). | Optional |
 | `CORS_ORIGINS` | Comma-separated list of allowed origins. | Optional |
 | `VITE_API_BASE` | URL of the backend API (used during frontend build). | Optional |
@@ -123,7 +124,7 @@ The easiest way to run the entire application is using Docker Compose.
     - **Backend API:** `http://localhost:8000`
 
 > [!NOTE]
-> On the first run, the backend will download several gigabytes of models for OCR (PaddleOCR) and X-ray analysis. This may take some time depending on your internet connection.
+> On the first run, the backend will download models for X-ray analysis. Ensure Tesseract is installed on your host system if running locally.
 
 ### Local Development Setup
 
