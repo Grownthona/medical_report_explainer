@@ -1,11 +1,4 @@
-"""
-X-Ray Analyzer Service
-Pre-trained model: TorchXRayVision (DenseNet121)
-
-SETUP:
-  pip install torchxrayvision torch torchvision pillow numpy
-"""
-
+import gc
 import io
 import logging
 
@@ -22,61 +15,62 @@ class XRayService:
     def __init__(self):
         self.model  = None
         self.labels = []
-        self._load_model()
+        logger.info("XRayService created (model loads on first use)")
 
-    # ── Load model ────────────────────────────────────────────────────────────
     def _load_model(self):
+        if self.model is not None:
+            return
         try:
-            logger.info("⏳ Loading DenseNet121 (TorchXRayVision)...")
-            self.model  = xrv.models.DenseNet(weights="densenet121-res224-all")
+            logger.info("Loading DenseNet121 in half precision...")
+            self.model = xrv.models.DenseNet(weights="densenet121-res224-rsna")
             self.model.eval()
+            self.model = self.model.half()  # ~400MB instead of ~800MB
             self.labels = self.model.pathologies
-            logger.info("✅ X-ray model loaded")
+            logger.info("X-ray model loaded")
         except Exception as e:
-            logger.error(f"❌ Failed to load X-ray model: {e}")
+            logger.error("Failed to load X-ray model: %s", e)
 
-    # ── Preprocess ────────────────────────────────────────────────────────────
+    def unload(self):
+        """Free RAM by unloading the model."""
+        if self.model is not None:
+            logger.info("Unloading XRay model to free RAM...")
+            del self.model
+            self.model  = None
+            self.labels = []
+            gc.collect()
+            torch.cuda.empty_cache()
+
     def _preprocess(self, image_bytes: bytes) -> torch.Tensor:
-        """Convert raw image bytes → model-ready tensor [1, 1, 224, 224]."""
         img       = Image.open(io.BytesIO(image_bytes)).convert("L")
         img_array = np.array(img.resize((224, 224))).astype(np.float32)
-        img_array = (img_array / 255.0) * 2048 - 1024          # scale to [-1024, 1024]
-        return torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0)
+        img_array = (img_array / 255.0) * 2048 - 1024
+        return torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).half()
 
-    # ── Public method ─────────────────────────────────────────────────────────
     def analyze(self, image_bytes: bytes) -> dict:
-        """
-        Run pathology detection on raw image bytes.
+        self._load_model()
 
-        Returns:
-            {
-                "success":      bool,
-                "findings":     [ { "condition": str, "probability": float } ],
-                "top_findings": [ ... ],   # only findings > 10%
-                "model":        str,
-                "disclaimer":   str
-            }
-        """
         if self.model is None:
-            raise RuntimeError("X-ray model is not loaded. Check torchxrayvision installation.")
+            raise RuntimeError("X-ray model failed to load.")
 
         tensor = self._preprocess(image_bytes)
 
         with torch.no_grad():
-            outputs = self.model(tensor).squeeze().numpy()
+            outputs = self.model(tensor).squeeze().float().numpy()
+
+        # Unload immediately after inference to free RAM
+        self.unload()
 
         findings = [
             {"condition": label, "probability": round(float(np.clip(score, 0, 1)) * 100, 1)}
             for label, score in zip(self.labels, outputs)
             if label
         ]
-
         findings.sort(key=lambda x: x["probability"], reverse=True)
 
         return {
             "success":      True,
             "findings":     findings,
             "top_findings": [f for f in findings if f["probability"] > 10],
-            "model":        "DenseNet121 — densenet121-res224-all",
+            "model":        "DenseNet121 — densenet121-res224-rsna (half precision)",
             "disclaimer":   "AI-assisted only. Not a medical diagnosis. Consult a doctor.",
         }

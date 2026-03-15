@@ -9,8 +9,6 @@ python-multipart>=0.0.9
 numpy>=1.24.0,<2.0.0
 
 # --- OCR ---
-paddlepaddle==2.6.2
-paddleocr==2.8.1
 opencv-python>=4.8.0,<4.11.0
 pytesseract>=0.3.10
 Pillow>=10.0.0,<11.0.0
@@ -25,7 +23,7 @@ langdetect>=1.0.9
 # --- NLP ---
 spacy>=3.7.0,<3.8.0
 
-# --- PyTorch (CPU-only, Windows-safe, numpy<2 compatible) ---
+# --- PyTorch (CPU-only) ---
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.2.2+cpu
 torchvision==0.17.2+cpu
@@ -33,6 +31,15 @@ torchvision==0.17.2+cpu
 # --- X-Ray Vision ---
 torchxrayvision==1.3.1
 
+# --- TTS & AI ---
 google-cloud-texttospeech
 protobuf==3.20.2
 openai
+
+# --- Monitoring ---
+psutil
+requests
+httpx
+beautifulsoup4
+networkx
+python-dotenv

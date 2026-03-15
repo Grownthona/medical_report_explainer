@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import gc
 from typing import Literal, List
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -15,7 +17,6 @@ from services.tts_service          import TTSService
 from services.chat_service         import ChatService, ChatRequest, ChatResponse
 from services.report_validator     import ReportValidator
 
-
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -25,26 +26,48 @@ app = FastAPI(
     version     = "1.0.0",
 )
 
-import os
-
-# Get CORS origins from environment variable, default to common development port
+# ── CORS ──────────────────────────────────────────────────────────────────────
 cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173")
 cors_origins = [origin.strip() for origin in cors_origins_str.split(",")]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = cors_origins,
-    allow_credentials = True,
-    allow_methods     = ["*"],
-    allow_headers     = ["*"],
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-ocr_service      = OCRService()
-xray_service     = XRayService()
-tts_service      = TTSService()
-chat_service     = ChatService()
+# ── Request size limit ────────────────────────────────────────────────────────
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    max_size = 500 * 1024 * 1024  # 500MB
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_size:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "File too large. Maximum size is 500MB."}
+        )
+    return await call_next(request)
+
+# ── Service initialization ────────────────────────────────────────────────────
+ocr_service      = OCRService()      # Tesseract — ~50MB, loads instantly
+chat_service     = ChatService()     # just an OpenAI client, very lightweight
+tts_service      = TTSService()      # just HTTP calls, no model loaded
 report_validator = ReportValidator()
-multi_processor  = MultiFileProcessor(ocr_service, xray_service, report_validator)
+
+# XRayService — lazy loaded on first x-ray request
+_xray_service: XRayService | None = None
+
+def get_xray_service() -> XRayService:
+    global _xray_service
+    if _xray_service is None:
+        logger.info("Loading XRayService on first use...")
+        _xray_service = XRayService()
+        logger.info("XRayService loaded")
+    return _xray_service
+
+multi_processor = MultiFileProcessor(ocr_service, get_xray_service, report_validator)
 
 SupportedLanguage = Literal["en", "bn", "ar", "hi", "ur"]
 _MAX_FILES        = 20
@@ -66,19 +89,6 @@ async def extract_from_file(
     files:    List[UploadFile] = File(...),
     language: SupportedLanguage = Form(default="en"),
 ):
-    """
-    Single file:
-      • Has text  → validate → assemble_report(raw, language)
-      • No text   → X-ray   → assemble_report(xray_result=result, language)
-                              → sections: { "XRAY": [...] }
-
-    Multiple files → MultiFileProcessor:
-      A) all text             → assemble_report(raw, language)
-      B) all xray             → assemble_report(xray_result=r, language)
-                                → sections: { "XRAY": [...] }
-      C) mixed text + xray    → assemble_report(raw, language, xray_result=r)
-                                → sections: { "LAB": [...], "XRAY": [...] }
-    """
     if not files:
         raise HTTPException(status_code=422, detail="No files provided.")
 
@@ -99,11 +109,11 @@ async def extract_from_file(
             logger.error("OCR failed for %s: %s", file.filename, e)
             raise HTTPException(status_code=422, detail=f"OCR failed: {e}")
 
-        # No text → X-ray path → sections: { "XRAY": [...] }
+        # No text → X-ray path
         if _is_empty(text):
             logger.info("No text in %s — routing to X-ray", file.filename)
             try:
-                xray_result = xray_service.analyze(file_bytes)
+                xray_result = get_xray_service().analyze(file_bytes)
                 return assemble_report(xray_result=xray_result, language=language)
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"X-ray analysis failed: {e}")
@@ -199,7 +209,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HEALTH CHECK
+# HEALTH + MEMORY CHECK
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/", summary="Health check")
@@ -211,3 +221,16 @@ async def root():
         "languages": ["en", "bn", "ar", "hi", "ur"],
         "limits":    {"max_files_per_request": _MAX_FILES},
     }
+
+@app.get("/memory", summary="Current memory usage (MB)")
+async def memory_usage():
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        mem_mb  = process.memory_info().rss / 1024 / 1024
+        return {
+            "used_mb":     round(mem_mb, 2),
+            "xray_loaded": _xray_service is not None,
+        }
+    except ImportError:
+        return {"error": "psutil not installed — add it to requirements.txt"}

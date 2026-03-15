@@ -1,249 +1,117 @@
 import io
 import os
-import asyncio
 import logging
+import asyncio
 import numpy as np
 import cv2
 
-from typing import Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from paddleocr import PaddleOCR
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image
 from fastapi import UploadFile, HTTPException
+import pytesseract
+#pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 logger = logging.getLogger(__name__)
 
-_MAX_OCR_WORKERS = int(os.getenv("OCR_MAX_WORKERS", "4"))
-
+_MAX_OCR_WORKERS  = int(os.getenv("OCR_MAX_WORKERS", "2"))
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "application/pdf"}
 
 
 class OCRService:
 
     def __init__(self):
-        self._paddle_ocr = None
-        self._init_engines()
-
-    def _init_engines(self):
-        try:
-            self._paddle_ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang='en',
-                det_db_thresh=0.5,
-                det_db_box_thresh=0.6,
-                det_db_unclip_ratio=1.5,
-                rec_algorithm='SVTR_LCNet',
-                use_gpu=False,
-            )
-            logger.info("PaddleOCR initialized")
-        except ImportError:
-            logger.warning("PaddleOCR not available")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # PUBLIC API
-    # ══════════════════════════════════════════════════════════════════════════
+        logger.info("OCRService created (Tesseract — ~50MB RAM)")
 
     def validate_file_type(self, content_type: str | None) -> None:
-        """
-        Public method — raises HTTPException 400 if content_type is not allowed.
-        Use this instead of the private _validate_type from outside this class.
-        """
         if content_type not in _ALLOWED_CONTENT_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"Unsupported file type '{content_type}'. "
-                    f"Allowed: {', '.join(sorted(_ALLOWED_CONTENT_TYPES))}"
-                ),
+                detail=f"Unsupported file type '{content_type}'. Allowed: {', '.join(sorted(_ALLOWED_CONTENT_TYPES))}"
             )
 
     async def extract_text(self, file: UploadFile, file_bytes: bytes) -> str:
-        """
-        Single-file entry point.
-        Returns extracted text string.
-        """
         self.validate_file_type(file.content_type)
         loop = asyncio.get_event_loop()
-
         if file.content_type == "application/pdf":
             return await loop.run_in_executor(None, self._extract_from_pdf, file_bytes)
         else:
             return await loop.run_in_executor(None, self._extract_from_image, file_bytes)
 
     async def extract_text_multi(self, files: list[UploadFile]) -> str:
-        """
-        Multi-file entry point.
-        Reads all files, OCRs them in parallel, joins with PAGE BREAK markers.
-        """
         if not files:
             return ""
 
-        read_tasks = [file.read() for file in files]
-        all_bytes: list[bytes] = await asyncio.gather(*read_tasks)
+        read_tasks  = [file.read() for file in files]
+        all_bytes   = await asyncio.gather(*read_tasks)
 
         for f in files:
             self.validate_file_type(f.content_type)
 
         loop = asyncio.get_event_loop()
 
-        def _ocr_one(idx: int) -> tuple[int, str]:
-            content_type = files[idx].content_type
-            file_bytes   = all_bytes[idx]
-            filename     = files[idx].filename or f"file_{idx}"
+        def _ocr_one(idx):
             try:
-                if content_type == "application/pdf":
-                    text = self._extract_from_pdf(file_bytes)
+                if files[idx].content_type == "application/pdf":
+                    text = self._extract_from_pdf(all_bytes[idx])
                 else:
-                    text = self._extract_from_image(file_bytes)
-                logger.info("OCR done: %s (%d chars)", filename, len(text))
+                    text = self._extract_from_image(all_bytes[idx])
+                logger.info("OCR done: %s (%d chars)", files[idx].filename, len(text))
                 return idx, text
             except Exception as e:
-                logger.error("OCR failed for %s: %s", filename, e)
+                logger.error("OCR failed for %s: %s", files[idx].filename, e)
                 return idx, ""
 
         with ThreadPoolExecutor(max_workers=min(len(files), _MAX_OCR_WORKERS)) as pool:
-            futures = {pool.submit(_ocr_one, i): i for i in range(len(files))}
-            results: dict[int, str] = {}
+            futures  = {pool.submit(_ocr_one, i): i for i in range(len(files))}
+            results  = {}
             for future in as_completed(futures):
                 idx, text = future.result()
                 results[idx] = text
 
-        ordered_texts = [results.get(i, "") for i in range(len(files))]
-        combined = "\n\n--- PAGE BREAK ---\n\n".join(
-            t for t in ordered_texts if t.strip()
-        )
-        logger.info(
-            "Multi-file OCR complete: %d files → %d chars total",
-            len(files), len(combined),
-        )
-        return combined
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # INTERNAL — image extraction
-    # ══════════════════════════════════════════════════════════════════════════
+        ordered = [results.get(i, "") for i in range(len(files))]
+        return "\n\n--- PAGE BREAK ---\n\n".join(t for t in ordered if t.strip())
 
     def _extract_from_image(self, image_bytes: bytes) -> str:
         img = self._preprocess_image(image_bytes)
-        processed_image = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-
-        if self._paddle_ocr:
-            try:
-                img_array = np.array(processed_image)
-                result    = self._paddle_ocr.ocr(img_array, cls=True)
-
-                if not result or result[0] is None or len(result[0]) == 0:
-                    logger.warning("PaddleOCR returned no text boxes")
-                    return ""
-
-                sorted_rows    = self.sort_ocr_results(result[0], line_threshold=30)
-                extracted_text = ""
-                for box, (text, confidence) in sorted_rows:
-                    extracted_text += text + " "
-                return extracted_text
-
-            except Exception as e:
-                logger.error("PaddleOCR failed: %s", e)
-
-        raise RuntimeError("No OCR engine available. Install paddleocr or pytesseract.")
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # INTERNAL — PDF extraction
-    # ══════════════════════════════════════════════════════════════════════════
+        # Tesseract config: treat as single column, preserve layout
+        config = "--oem 3 --psm 6 -l eng"
+        text   = pytesseract.image_to_string(img, config=config)
+        logger.info("Tesseract extracted %d chars", len(text))
+        return text.strip()
 
     def _extract_from_pdf(self, pdf_bytes: bytes) -> str:
-        import pdfplumber
-
+        from pdf2image import convert_from_bytes
+        #poppler_path = r"C:\poppler\Library\bin"
+        pages      = convert_from_bytes(pdf_bytes, dpi=300)
         text_pages = []
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text and len(page_text.strip()) > 50:
-                    text_pages.append(page_text)
-                else:
-                    img       = page.to_image(resolution=300).original
-                    img_bytes = io.BytesIO()
-                    img.save(img_bytes, format="PNG")
-                    ocr_text  = self._extract_from_image(img_bytes.getvalue())
-                    text_pages.append(ocr_text)
+        for page_img in pages:
+            # Try direct text extraction first via pdfplumber
+            text = pytesseract.image_to_string(page_img, config="--oem 3 --psm 6 -l eng")
+            text_pages.append(text.strip())
+        return "\n\n--- PAGE BREAK ---\n\n".join(t for t in text_pages if t)
 
-        return "\n\n--- PAGE BREAK ---\n\n".join(text_pages)
+    def _preprocess_image(self, image_bytes: bytes) -> Image.Image:
+        nparr  = np.frombuffer(image_bytes, np.uint8)
+        img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # INTERNAL — helpers
-    # ══════════════════════════════════════════════════════════════════════════
+        if img_cv is None:
+            raise ValueError("Could not decode image")
 
+        # Upscale if too small
+        h, w = img_cv.shape[:2]
+        if max(h, w) < 1000:
+            scale  = 1000 / max(h, w)
+            img_cv = cv2.resize(img_cv, (int(w * scale), int(h * scale)),
+                                interpolation=cv2.INTER_CUBIC)
+
+        # Convert to grayscale + denoise
+        gray    = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        denoised = cv2.fastNlMeansDenoising(gray, h=10)
+
+        return Image.fromarray(denoised)
+
+    # backward compat
     @staticmethod
-    def _validate_type(content_type: str | None) -> None:
-        """Kept for backward compatibility — prefer validate_file_type()."""
+    def _validate_type(content_type):
         if content_type not in _ALLOWED_CONTENT_TYPES:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Unsupported file type '{content_type}'. "
-                    f"Allowed: {', '.join(sorted(_ALLOWED_CONTENT_TYPES))}"
-                ),
-            )
-
-    def sort_ocr_results(self, lines, line_threshold=10):
-        sorted_lines = sorted(lines, key=lambda x: x[0][0][1])
-        rows         = []
-        current_row  = [sorted_lines[0]]
-
-        for line in sorted_lines[1:]:
-            y = line[0][0][1]
-            if abs(y - current_row[-1][0][0][1]) < line_threshold:
-                current_row.append(line)
-            else:
-                rows.append(sorted(current_row, key=lambda x: x[0][0][0]))
-                current_row = [line]
-        rows.append(sorted(current_row, key=lambda x: x[0][0][0]))
-
-        return [item for row in rows for item in row]
-
-    def crop_remove_signature(self, img_bytes: bytes):
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        if image is None:
-            raise ValueError("Image could not be loaded.")
-
-        gray   = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(
-            gray, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 25, 15,
-        )
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        height        = image.shape[0]
-        signature_top = height
-
-        for c in contours:
-            x, y, w, h = cv2.boundingRect(c)
-            if w * h < 1000:
-                continue
-            if y > height * 0.87:
-                signature_top = min(signature_top, y)
-
-        cropped = image[:signature_top - 10, :] if signature_top < height else image
-        return cropped
-
-    def _preprocess_image(self, image: bytes):
-        cropped_image = self.crop_remove_signature(image)
-        cropped_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)
-        img           = Image.fromarray(cropped_image)
-
-        if img.mode not in ('RGB', 'L'):
-            img = img.convert('RGB')
-
-        min_dim = 1000
-        if max(img.size) < min_dim:
-            scale    = min_dim / max(img.size)
-            new_size = (int(img.width * scale), int(img.height * scale))
-            img      = img.resize(
-                new_size,
-                resample=img.LANCZOS if hasattr(img, 'LANCZOS') else 1,
-            )
-
-        return img
+            raise HTTPException(status_code=400, detail=f"Unsupported file type '{content_type}'")
