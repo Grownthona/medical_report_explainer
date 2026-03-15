@@ -1,6 +1,21 @@
+import { useNavigate, useLocation } from "react-router-dom";
 import "../styles/Navbar.css";
 
 export default function Navbar({ onBack }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const handleLogoClick = () => {
+    if (location.pathname === "/results") {
+      navigate("/");
+    } else if (location.pathname === "/" || location.pathname === "/upload") {
+      if (location.state?.reportData) {
+        navigate("/results", { state: location.state });
+      } else {
+        navigate("/");
+      }
+    }
+  };
   return (
     <nav className={`navbar ${onBack ? "navbar-sticky" : ""}`}>
       
@@ -13,7 +28,7 @@ export default function Navbar({ onBack }) {
           </button>
         )}
 
-        <div className="navbar-brand">
+        <div className="navbar-brand" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className={`navbar-icon ${onBack ? "navbar-icon-small" : ""}`}>
             🩺
           </span>

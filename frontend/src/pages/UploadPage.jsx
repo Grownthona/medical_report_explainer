@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import DropZone from "../components/DropZone";
 import { LANGUAGES, FEATURE_PILLS } from "../utils/constants";
@@ -9,6 +10,7 @@ import "../styles/UploadPage.css";
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 export default function UploadPage({ onAnalyze }) {
+  const navigate = useNavigate();
   const [tab, setTab] = useState("upload");
   const [files, setFiles] = useState([]);
 
@@ -77,7 +79,8 @@ export default function UploadPage({ onAnalyze }) {
         data = await res.json();
       }
 
-      onAnalyze(data, language);
+      if (onAnalyze) onAnalyze(data, language);
+      navigate("/results", { state: { reportData: data, language: language } });
     } catch (err) {
       setError(err.message || "Something went wrong.");
     } finally {

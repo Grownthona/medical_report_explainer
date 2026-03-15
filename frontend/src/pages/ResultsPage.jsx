@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import PatientCard from "../components/PatientCard";
 import LanguageBadge from "../components/LanguageBadge";
@@ -7,8 +8,28 @@ import SectionPanel from "../components/SectionPanel";
 import ChatBot from "../components/ChatBot";
 import { LANGUAGES } from "../utils/constants";
 
-export default function ResultsPage({ data, language, onBack }) {
+export default function ResultsPage({ 
+  data: propData, 
+  language: propLanguage, 
+  onBack: propOnBack 
+}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const data = propData || location.state?.reportData;
+  const language = propLanguage || location.state?.language || "en";
+
+  const onBack = propOnBack || (() => navigate("/", { state: location.state }));
+
+  useEffect(() => {
+    if (!data) {
+      navigate("/");
+    }
+  }, [data, navigate]);
+
   const [activePatientIndex, setActivePatientIndex] = useState(0);
+
+  if (!data) return null;
 
   // Convert "en" -> "English"
   const languageName =
