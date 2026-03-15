@@ -7,7 +7,7 @@ from typing import Literal
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel
-from services.graph_store import MediBotGraph      # 👈 add this
+from services.graph_store import MediBotGraph
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -46,7 +46,7 @@ class ChatResponse(BaseModel):
 class ChatService:
 
     DEFAULT_MODEL       = "gpt-4o-mini"
-    DEFAULT_MAX_TOKENS  = 1024          # 👈 bumped from 512
+    DEFAULT_MAX_TOKENS  = 1024
     DEFAULT_TEMPERATURE = 0.5
 
     def __init__(
@@ -57,22 +57,32 @@ class ChatService:
         temperature: float      = DEFAULT_TEMPERATURE,
     ) -> None:
         self._client = AsyncOpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
-        self._graph  = MediBotGraph()   # 👈 one graph per service instance
+        self._graph  = MediBotGraph()
         self.model        = model
         self.max_tokens   = max_tokens
         self.temperature  = temperature
 
     async def chat(self, req: ChatRequest) -> ChatResponse:
-        # Build graph fresh from this session's report data
+        # Rebuild graph from this request's report data
         if req.patient_data:
-            self._graph.build_from_report(req.patient_data)   # 👈
+            self._graph.build_from_report(req.patient_data)
 
-        system_prompt   = self._build_system_prompt(req.patient_data, req.language, req.messages)
+        # Extract latest user query for graph traversal + enrichment
+        latest_query = ""
+        if req.messages:
+            user_msgs = [m.content for m in req.messages if m.role == "user"]
+            if user_msgs:
+                latest_query = user_msgs[-1]
+
+        # retrieve_context is now async (handles web enrichment internally)
+        graph_context = await self._graph.retrieve_context(latest_query)
+
+        system_prompt   = self._build_system_prompt(req.language, graph_context, bool(req.patient_data))
         openai_messages = self._build_messages(system_prompt, req.messages)
 
         logger.info(
-            "ChatService.chat | model=%s lang=%s msgs=%d has_patient_data=%s",
-            self.model, req.language, len(req.messages), req.patient_data is not None,
+            "ChatService.chat | model=%s lang=%s msgs=%d has_data=%s",
+            self.model, req.language, len(req.messages), bool(req.patient_data),
         )
 
         try:
@@ -90,6 +100,8 @@ class ChatService:
         input_tokens  = completion.usage.prompt_tokens     if completion.usage else 0
         output_tokens = completion.usage.completion_tokens if completion.usage else 0
 
+        logger.info("ChatService.chat | tokens in=%d out=%d", input_tokens, output_tokens)
+
         return ChatResponse(
             reply         = reply,
             model         = completion.model,
@@ -99,9 +111,9 @@ class ChatService:
 
     def _build_system_prompt(
         self,
-        patient_data: dict | None,
         language: str,
-        messages: list[ChatMessage] | None = None,   # 👈 needed for query extraction
+        graph_context: str,
+        has_patient_data: bool,
     ) -> str:
         lang_name = _LANGUAGE_NAMES.get(language, "English")
 
@@ -112,26 +124,21 @@ class ChatService:
             "Be empathetic and clear. "
             "Always remind the user to consult a licensed doctor for medical decisions. "
             "Keep responses concise — 2 to 4 sentences unless more detail is clearly needed. "
-            "When multiple patients are present, always state which patient you are referring to."
+            "When multiple patients are present, always state which patient you are referring to. "
+            "When MedlinePlus data is provided in the context, use it to give accurate explanations "
+            "and mention it is from NIH MedlinePlus so the patient knows the source is trustworthy."
         )
 
-        if not patient_data:
+        if not has_patient_data:
             return base
 
-        # Extract the latest user query for smarter graph traversal
-        latest_query = ""
-        if messages:
-            user_msgs = [m.content for m in messages if m.role == "user"]
-            if user_msgs:
-                latest_query = user_msgs[-1]
-
-        # 🔑 Graph RAG: targeted context instead of raw JSON dump
-        graph_context = self._graph.retrieve_context(latest_query)
-
         context = (
-            "\n\nRelevant patient data retrieved from knowledge graph:\n"
+            "\n\nRelevant patient data retrieved from knowledge graph"
+            " (may include NIH MedlinePlus definitions for abnormal tests):\n"
             f"{graph_context}\n\n"
-            "Answer based only on the above data. Do not invent values not present in the report."
+            "Answer based on the above data. "
+            "Do not invent values not present in the report. "
+            "If MedlinePlus knowledge is included, incorporate it naturally into your explanation."
         )
         return base + context
 

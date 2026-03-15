@@ -1,19 +1,24 @@
 # graph_store.py
 from __future__ import annotations
+import asyncio
+import logging
 import networkx as nx
+from services.web_enricher import fetch_test_knowledge, needs_enrichment
+
+logger = logging.getLogger(__name__)
 
 
 class MediBotGraph:
     """
     Universal Graph RAG store for MediBot.
 
-    Handles all 6 report formats:
-      1. Single patient  + report{}           (is_multi_patient=false, has "report")
-      2. Single patient  + sections{}         (is_multi_patient=false, has "sections")
-      3. Single patient  + report{} + XRAY    (AI probability tests, status="High"/"Low")
-      4. Multi-patient   + patients[report{}] (each patient has "report")
-      5. Multi-patient   + patients[sections{}] (each patient has "sections")
-      6. Clinical/OPD    + report, no tests[] (psychiatric, dental — tests_analysis=[])
+    Handles all report formats:
+      1. Single patient  + report{}
+      2. Single patient  + sections{}
+      3. Single patient  + XRAY AI probability findings
+      4. Multi-patient   + patients[report{}]
+      5. Multi-patient   + patients[sections{}]
+      6. Clinical/OPD    + report with no tests_analysis (psychiatric, dental)
     """
 
     def __init__(self) -> None:
@@ -24,24 +29,31 @@ class MediBotGraph:
     # ══════════════════════════════════════════════════════════════════
 
     def build_from_report(self, data: dict) -> None:
+        """Clear graph and rebuild from fresh report JSON."""
         self.G.clear()
         for patient in self._normalise(data):
             self._index_patient(patient)
 
-    def retrieve_context(self, query: str) -> str:
+    async def retrieve_context(self, query: str) -> str:
         """
-        Traverse the graph and return relevant context string.
-        Prioritises abnormal/high-risk findings.
-        Filters by patient name if one is mentioned in the query.
+        Traverse the graph and return a context string for the LLM.
+        - Enriches abnormal tests with MedlinePlus knowledge when query
+          asks for explanation (lazy, cached per test slug).
+        - Filters to the named patient if one is mentioned in the query.
+        - Always surfaces abnormal tests; shows normal tests only when
+          the query explicitly asks for all results.
         """
         query_lower = query.lower()
-        mentioned   = self._mentioned_patients(query_lower)
+
+        # Web enrichment — only when query needs explanation
+        await self._enrich_abnormal_tests(query_lower)
+
+        mentioned = self._mentioned_patients(query_lower)
         lines: list[str] = []
 
         for pid, pdata in self._patients():
             name = (pdata.get("name") or "").strip()
 
-            # Name filter: skip if query names a different patient
             if mentioned and not any(m in name.lower() for m in mentioned):
                 continue
 
@@ -61,7 +73,7 @@ class MediBotGraph:
         return "\n".join(lines) or "No relevant patient data found."
 
     def get_all_abnormal(self) -> list[dict]:
-        """Return every abnormal/high test across all patients."""
+        """Return every abnormal test node across all patients."""
         return [
             {"node_id": nid, **d}
             for nid, d in self.G.nodes(data=True)
@@ -73,69 +85,55 @@ class MediBotGraph:
     # ══════════════════════════════════════════════════════════════════
 
     def _normalise(self, data: dict) -> list[dict]:
-        """
-        Always returns a list of normalised patient dicts:
-          {
-            "info":     { name, age_years, gender, collection_date, ... },
-            "sections": [ { section_title, section_type, risk_level,
-                            advice, tests_analysis: [...] }, ... ]
-          }
-        """
-        # ── Multi-patient wrapper ──────────────────────────────────────
         if data.get("is_multi_patient") and "patients" in data:
             return [self._normalise_one(p) for p in data["patients"]]
-
-        # ── Single patient ─────────────────────────────────────────────
         return [self._normalise_one(data)]
 
     def _normalise_one(self, p: dict) -> dict:
         info = p.get("patient", {})
-
         sections: list[dict] = []
 
-        # Format A: flat "report" key  (single-section)
+        # Format A: flat "report" key
         if "report" in p and p["report"]:
             raw = p["report"]
-            section_type = self._infer_section_type(p, raw)
             sections.append({
-                "section_title": raw.get("section_title", "Report"),
-                "section_type":  section_type,
-                "risk_level":    raw.get("risk_level"),
-                "advice":        raw.get("advice"),
-                "summary":       raw.get("summary"),
+                "section_title":  raw.get("section_title", "Report"),
+                "section_type":   self._infer_section_type(p, raw),
+                "risk_level":     raw.get("risk_level"),
+                "advice":         raw.get("advice"),
+                "summary":        raw.get("summary"),
                 "tests_analysis": raw.get("tests_analysis") or [],
             })
 
-        # Format B: "sections" dict  { "LAB": [...], "IMAGING": [...], "XRAY": [...], ... }
+        # Format B: "sections" dict { "LAB": [...], "IMAGING": [...], ... }
         if "sections" in p and p["sections"]:
             for stype, section_list in p["sections"].items():
                 if not isinstance(section_list, list):
                     continue
                 for sec in section_list:
                     sections.append({
-                        "section_title": sec.get("section_title", stype),
-                        "section_type":  stype,
-                        "risk_level":    sec.get("risk_level"),
-                        "advice":        sec.get("advice"),
-                        "summary":       sec.get("summary"),
+                        "section_title":  sec.get("section_title", stype),
+                        "section_type":   stype,
+                        "risk_level":     sec.get("risk_level"),
+                        "advice":         sec.get("advice"),
+                        "summary":        sec.get("summary"),
                         "tests_analysis": sec.get("tests_analysis") or [],
                     })
 
         return {"info": info, "sections": sections}
 
     def _infer_section_type(self, p: dict, report: dict) -> str:
-        """Best-guess section type when using flat 'report' format."""
         cat = (
             p.get("document_type", {}).get("category") or
             p.get("document_type", {}).get("sub_type") or
             report.get("section_title") or
             "UNKNOWN"
         ).upper()
-        if "LAB" in cat or "CBC" in cat or "HAEM" in cat or "BIO" in cat:
+        if any(k in cat for k in ("LAB", "CBC", "HAEM", "BIO", "BIOCHEM")):
             return "LAB"
-        if "IMAG" in cat or "XRAY" in cat or "X-RAY" in cat or "MRI" in cat:
+        if any(k in cat for k in ("IMAG", "XRAY", "X-RAY", "MRI", "CT", "SCAN")):
             return "IMAGING"
-        if "CLIN" in cat or "OPD" in cat or "PSYCH" in cat or "SPEC" in cat:
+        if any(k in cat for k in ("CLIN", "OPD", "PSYCH", "SPEC", "DENTAL")):
             return "CLINICAL"
         return cat
 
@@ -146,7 +144,7 @@ class MediBotGraph:
     def _index_patient(self, patient: dict) -> None:
         info = patient["info"]
         name = (info.get("name") or "unknown").strip()
-        pid  = f"patient::{name}::{info.get('collection_date','')}"
+        pid  = f"patient::{name}::{info.get('collection_date', '')}"
 
         self.G.add_node(pid,
             type            = "Patient",
@@ -161,9 +159,9 @@ class MediBotGraph:
             self._index_section(pid, section)
 
     def _index_section(self, pid: str, section: dict) -> None:
-        title   = section["section_title"]
-        stype   = section["section_type"]
-        rid     = f"report::{pid}::{title}"
+        title = section["section_title"]
+        stype = section["section_type"]
+        rid   = f"report::{pid}::{title}"
 
         self.G.add_node(rid,
             type         = "Report",
@@ -179,10 +177,8 @@ class MediBotGraph:
         for test in tests:
             self._index_test(pid, rid, test)
 
-        # Clinical/OPD sections often have no tests — still indexed via the
-        # Report node so advice + summary are retrievable
+        # Clinical sections with no tests — store summary as pseudo-test
         if not tests and section.get("summary"):
-            # Store summary as a pseudo-test so it surfaces in retrieval
             self._index_pseudo_test(rid, section)
 
     def _index_test(self, pid: str, rid: str, test: dict) -> None:
@@ -206,7 +202,6 @@ class MediBotGraph:
             self.G.add_edge(pid, tid, rel="ABNORMAL_IN")
 
     def _index_pseudo_test(self, rid: str, section: dict) -> None:
-        """For clinical notes with no tests_analysis, store the summary as a node."""
         tid = f"test::{rid}::clinical_summary"
         self.G.add_node(tid,
             type        = "Test",
@@ -219,22 +214,66 @@ class MediBotGraph:
         self.G.add_edge(rid, tid, rel="HAS_TEST")
 
     # ══════════════════════════════════════════════════════════════════
-    # Step 3 — Retrieval helpers
+    # Step 3 — Web enrichment (async, lazy, cached)
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _enrich_abnormal_tests(self, query_lower: str) -> None:
+        """
+        Fetch MedlinePlus knowledge for abnormal tests and attach as
+        KnowledgeBase nodes. Skips tests already enriched. Only runs
+        when the query is explanation-type.
+        """
+        if not needs_enrichment(query_lower):
+            return
+
+        # Collect abnormal test nodes that don't yet have a KB child
+        to_enrich = [
+            (nid, d)
+            for nid, d in self.G.nodes(data=True)
+            if d.get("type") == "Test"
+            and self._is_abnormal(d)
+            and not any(
+                self.G.nodes[s].get("type") == "KnowledgeBase"
+                for s in self.G.successors(nid)
+            )
+        ]
+
+        if not to_enrich:
+            return
+
+        # Fetch all in parallel
+        results = await asyncio.gather(
+            *[fetch_test_knowledge(d.get("name", "")) for _, d in to_enrich],
+            return_exceptions=True,
+        )
+
+        for (tid, _), knowledge in zip(to_enrich, results):
+            if not knowledge or isinstance(knowledge, Exception):
+                continue
+            test_name = self.G.nodes[tid].get("name", "unknown")
+            kid = f"kb::{test_name}"
+            # Add KB node (or update if already exists from a previous slug match)
+            self.G.add_node(kid, type="KnowledgeBase", **knowledge)
+            self.G.add_edge(tid, kid, rel="HAS_DEFINITION")
+            logger.debug("KB node attached: %s → %s", test_name, knowledge.get("url"))
+
+    # ══════════════════════════════════════════════════════════════════
+    # Step 4 — Retrieval formatting
     # ══════════════════════════════════════════════════════════════════
 
     def _format_report_node(
         self, rid: str, rdata: dict, query_lower: str
     ) -> list[str]:
         lines = [
-            f"  [{rdata.get('section_type','?')}] "
-            f"{rdata.get('title','Report')} — "
-            f"risk: {rdata.get('risk_level','?')}"
+            f"  [{rdata.get('section_type', '?')}] "
+            f"{rdata.get('title', 'Report')} — "
+            f"risk: {rdata.get('risk_level', '?')}"
         ]
 
-        all_tests  = list(self.G.successors(rid))
-        abnormal   = [t for t in all_tests if self._is_abnormal(self.G.nodes[t])]
-        normal     = [t for t in all_tests if not self._is_abnormal(self.G.nodes[t])]
-        want_all   = self._wants_all_tests(query_lower)
+        all_tests = list(self.G.successors(rid))
+        abnormal  = [t for t in all_tests if self._is_abnormal(self.G.nodes[t])]
+        normal    = [t for t in all_tests if not self._is_abnormal(self.G.nodes[t])]
+        want_all  = self._wants_all_tests(query_lower)
 
         for tid in abnormal + (normal if want_all else []):
             t    = self.G.nodes[tid]
@@ -242,19 +281,42 @@ class MediBotGraph:
             val  = t.get("value", "")
             unit = t.get("unit", "")
             ref  = t.get("reference_range", "")
+
             lines.append(
                 f"    {flag}{t['name']}: {val} {unit}"
-                + (f" (ref: {ref})" if ref and ref != "N/A" else "")
-                + f" → {t.get('status','?')}"
+                + (f" (ref: {ref})" if ref and ref not in ("N/A", "") else "")
+                + f" → {t.get('status', '?')}"
             )
-            # Always show explanation for abnormal tests
+
+            # Show report explanation for abnormal tests
             if flag and t.get("explanation"):
                 lines.append(f"      ↳ {t['explanation']}")
+
+            # Attach MedlinePlus KB knowledge if available
+            for kid in self.G.successors(tid):
+                kb = self.G.nodes[kid]
+                if kb.get("type") != "KnowledgeBase":
+                    continue
+                if kb.get("full_name"):
+                    lines.append(f"      📚 {kb['full_name']}")
+                if kb.get("what_it_measures"):
+                    lines.append(f"         Measures: {kb['what_it_measures'][:200]}")
+                if kb.get("abnormal_means"):
+                    lines.append(f"         Abnormal means: {kb['abnormal_means'][:200]}")
+                if kb.get("common_causes"):
+                    lines.append(f"         Common causes: {kb['common_causes'][:200]}")
+                if kb.get("patient_advice"):
+                    lines.append(f"         Note: {kb['patient_advice'][:150]}")
+                lines.append(f"         (Source: {kb.get('source', 'MedlinePlus')})")
 
         if rdata.get("advice"):
             lines.append(f"  Advice: {rdata['advice']}")
 
         return lines
+
+    # ══════════════════════════════════════════════════════════════════
+    # Helpers
+    # ══════════════════════════════════════════════════════════════════
 
     def _patients(self):
         return [
@@ -264,36 +326,27 @@ class MediBotGraph:
         ]
 
     def _mentioned_patients(self, query: str) -> list[str]:
-        """Return lowercase name fragments found in the query."""
-        all_names = [
-            d["name"].lower()
-            for _, d in self._patients()
-            if d.get("name")
-        ]
-        # Also try first names only
-        fragments = set()
-        for full in all_names:
+        fragments: set[str] = set()
+        for _, d in self._patients():
+            full = (d.get("name") or "").lower()
             parts = full.split()
             fragments.add(full)
             if parts:
-                fragments.add(parts[0])   # first name
-                fragments.add(parts[-1])  # last name
-
-        return [f for f in fragments if f in query]
+                fragments.add(parts[0])
+                fragments.add(parts[-1])
+        return [f for f in fragments if f and f in query]
 
     @staticmethod
     def _is_abnormal(node: dict) -> bool:
         status = (node.get("status") or "").lower()
         return status in ("high", "low", "abnormal", "critical", "unknown")
-        # Note: "Unknown" is included — imaging AI findings & ungraded results
-        # should surface so the LLM can flag them rather than silently ignore
 
     @staticmethod
     def _wants_all_tests(query: str) -> bool:
         keywords = [
             "all", "every", "full", "complete", "list",
-            "সব", "সকল", "পুরো", "সম্পূর্ণ",         # Bengali
-            "كل", "جميع",                              # Arabic
-            "सभी", "पूरा",                             # Hindi
+            "সব", "সকল", "পুরো", "সম্পূর্ণ",
+            "كل", "جميع",
+            "सभी", "पूरा",
         ]
         return any(k in query for k in keywords)
