@@ -1,0 +1,10 @@
+# flyctl launch added from .gitignore
+**\venv
+**\.env
+**\.env
+app\processed
+app\uploads
+
+# flyctl launch added from .venv\.gitignore
+.venv\**\*
+fly.toml
