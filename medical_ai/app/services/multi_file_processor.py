@@ -5,15 +5,40 @@ Handles multi-file uploads where the batch may contain a mix of:
   • Text-bearing files  (PDFs, scanned lab reports, prescriptions)
   • X-ray images        (no extractable text → routed to XRayService)
 
-All assembly is delegated to assemble_report() which now handles all cases:
-  A) Text only    → assemble_report(raw, language)
-  B) X-ray only   → assemble_report(xray_result=result, language)
-                    sections: { "XRAY": [...] }
-  C) Text + xray  → assemble_report(raw, language, xray_result=result)
-                    sections: { "LAB": [...], "XRAY": [...] }
+KEY DESIGN: one file = one patient.
+  Each file is assembled independently via assemble_report() and returned
+  in a "patients" array — consistent with the multi-patient response shape
+  produced by assembler.py's _run_text_pipeline().
 
-Multiple X-ray files: each is returned as a separate top-level entry under
-"xray_reports" since assemble_report() handles one xray_result at a time.
+  Exception: if there is exactly ONE text file AND exactly ONE x-ray file
+  they are merged into a single mixed report
+  (sections: { "LAB": [...], "XRAY": [...] }) because they most likely
+  belong to the same patient.
+
+Response shapes:
+
+  1 text file, 0 x-ray files
+      → standard single-patient assemble_report() response (unchanged shape)
+
+  0 text files, 1 x-ray file
+      → assemble_report(xray_result=r, language)
+      → { ..., sections: { "XRAY": [...] } }
+
+  1 text file, 1 x-ray file   ← "same patient" heuristic
+      → assemble_report(raw, language, xray_result=r)
+      → { ..., is_mixed: True, sections: { "LAB": [...], "XRAY": [...] } }
+
+  N files where N > 1 and not the 1+1 case above
+      → each file assembled independently
+      → {
+            is_multi_patient: True,
+            total_patients:   N,
+            patients: [
+                { patient_index: 0, source_file: "a.pdf", ...report... },
+                { patient_index: 1, source_file: "b.pdf", ...report... },
+                ...
+            ]
+         }
 """
 
 from __future__ import annotations
@@ -49,25 +74,7 @@ class MultiFileProcessor:
         self._validator = report_validator
 
     async def process(self, files: list[UploadFile], language: str) -> dict:
-        """
-        Route a multi-file batch through assemble_report().
 
-        Response shapes (all from assemble_report — consistent with single-file):
-          A) All text files
-             → standard assemble_report() response (unchanged shape)
-
-          B) Single X-ray file
-             → assemble_report(xray_result=r, language)
-             → { ..., sections: { "XRAY": [...] } }
-
-          C) Text + single X-ray
-             → assemble_report(raw, language, xray_result=r)
-             → { ..., is_mixed: True, sections: { "LAB": [...], "XRAY": [...] } }
-
-          D) Multiple X-ray files (with or without text)
-             → first xray paired with text (if any), rest xray-only
-             → { is_multi_xray: True, total: N, reports: [...] }
-        """
         # ── Read + validate all files ─────────────────────────────────────────
         all_bytes: list[bytes] = []
         for f in files:
@@ -76,9 +83,11 @@ class MultiFileProcessor:
         for f in files:
             self._ocr.validate_file_type(f.content_type)
 
-        # ── OCR each file, bucket into text vs xray ───────────────────────────
-        text_files: list[tuple[str, str]]   = []  # (filename, ocr_text)
-        xray_files: list[tuple[str, bytes]] = []  # (filename, raw_bytes)
+        # ── OCR each file, bucket into text vs x-ray ──────────────────────────
+        # text_files : list of (filename, ocr_text)
+        # xray_files : list of (filename, raw_bytes)
+        text_files: list[tuple[str, str]]   = []
+        xray_files: list[tuple[str, bytes]] = []
 
         for idx, (f, raw) in enumerate(zip(files, all_bytes)):
             filename = f.filename or f"file_{idx}"
@@ -95,61 +104,128 @@ class MultiFileProcessor:
                 logger.info("%s → text (%d chars)", filename, len(text))
                 text_files.append((filename, text))
 
-        # ── Validate + merge text ─────────────────────────────────────────────
-        combined_text = ""
+        total_files = len(text_files) + len(xray_files)
 
-        if text_files:
-            merged     = "\n\n--- PAGE BREAK ---\n\n".join(t for _, t in text_files)
-            validation = self._validator.validate(merged)
+        # ── Special case: 1 text + 1 x-ray → single mixed report ─────────────
+        # These almost certainly belong to the same patient.
+        if len(text_files) == 1 and len(xray_files) == 1:
+            fname_text, text      = text_files[0]
+            fname_xray, xray_raw  = xray_files[0]
+
+            validation = self._validator.validate(text)
             if not validation.is_medical:
-                logger.warning("Text files rejected (score=%d)", validation.score)
-                if not xray_files:
-                    # Nothing left to process — hard reject
-                    raise HTTPException(status_code=422, detail=validation.reason)
-                # X-ray files still present — proceed without text
-                logger.info("Continuing with X-ray files only (text rejected)")
-            else:
-                combined_text = merged
-                logger.info("Text accepted: %d chars, score=%d", len(combined_text), validation.score)
+                raise HTTPException(status_code=422, detail=validation.reason)
 
-        # ── Case A: text only, no X-ray files ────────────────────────────────
-        if combined_text and not xray_files:
-            return assemble_report(combined_text, language=language)
-
-        # ── Process X-ray files ───────────────────────────────────────────────
-        # First X-ray is paired with combined_text (may be "") so assemble_report
-        # can merge them into sections: { "LAB": [...], "XRAY": [...] }.
-        # Subsequent X-ray files are always xray-only.
-        reports: list[dict] = []
-        text_consumed = False
-
-        for filename, raw in xray_files:
             try:
-                xray_result = self._xray.analyze(raw)
-                raw_text    = combined_text if not text_consumed else ""
-                response    = assemble_report(
-                    raw         = raw_text,
-                    language    = language,
-                    xray_result = xray_result,
-                )
-                response["source_file"] = filename
-                reports.append(response)
-                text_consumed = True
-                logger.info("X-ray processed: %s", filename)
+                xray_result = self._xray.analyze(xray_raw)
             except Exception as e:
-                logger.error("X-ray failed for %s: %s", filename, e)
-                reports.append({
-                    "source_file": filename,
-                    "error":       f"X-ray analysis failed: {e}",
+                raise HTTPException(status_code=500, detail=f"X-ray analysis failed: {e}")
+
+            logger.info("1 text + 1 x-ray → single mixed report")
+            return assemble_report(text, language=language, xray_result=xray_result)
+
+        # ── General case: each file is a separate patient ─────────────────────
+        # Build a flat ordered list: text files first (preserving upload order),
+        # then x-ray files. Re-sort by original upload index so the patient_index
+        # matches the order the user uploaded the files.
+        #
+        # We rebuild an ordered list of (filename, kind, payload) from the
+        # original zip so upload order is honoured.
+        ordered: list[tuple[str, str, str | bytes]] = []
+        text_iter = iter(text_files)
+        xray_iter = iter(xray_files)
+
+        for idx, (f, raw) in enumerate(zip(files, all_bytes)):
+            filename = f.filename or f"file_{idx}"
+            # Decide which bucket this filename belongs to
+            # (text_files / xray_files were built in the same loop order)
+            if any(fn == filename for fn, _ in text_files):
+                fn, t = next(
+                    ((fn, t) for fn, t in text_files if fn == filename),
+                    (filename, ""),
+                )
+                ordered.append((filename, "text", t))
+            else:
+                fn, rb = next(
+                    ((fn, rb) for fn, rb in xray_files if fn == filename),
+                    (filename, raw),
+                )
+                ordered.append((filename, "xray", rb))
+
+        # ── Single file fast-path (shouldn't normally reach here, but safety) ─
+        if total_files == 1:
+            filename, kind, payload = ordered[0]
+            if kind == "text":
+                validation = self._validator.validate(payload)          # type: ignore[arg-type]
+                if not validation.is_medical:
+                    raise HTTPException(status_code=422, detail=validation.reason)
+                return assemble_report(payload, language=language)      # type: ignore[arg-type]
+            else:
+                try:
+                    xray_result = self._xray.analyze(payload)           # type: ignore[arg-type]
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"X-ray analysis failed: {e}")
+                return assemble_report(xray_result=xray_result, language=language)
+
+        # ── Multi-patient: assemble each file independently ───────────────────
+        patients: list[dict] = []
+
+        for patient_index, (filename, kind, payload) in enumerate(ordered):
+            try:
+                if kind == "text":
+                    text = payload  # type: ignore[assignment]
+                    validation = self._validator.validate(text)
+                    if not validation.is_medical:
+                        logger.warning(
+                            "File %s rejected as non-medical (score=%d) — skipping",
+                            filename, validation.score,
+                        )
+                        patients.append({
+                            "patient_index": patient_index,
+                            "source_file":   filename,
+                            "error":         validation.reason,
+                        })
+                        continue
+
+                    report = assemble_report(text, language=language)
+
+                else:  # kind == "xray"
+                    xray_raw = payload  # type: ignore[assignment]
+                    xray_result = self._xray.analyze(xray_raw)
+                    report = assemble_report(xray_result=xray_result, language=language)
+
+                report["patient_index"] = patient_index
+                report["source_file"]   = filename
+                patients.append(report)
+                logger.info(
+                    "Patient %d assembled: %s (%s)",
+                    patient_index, filename, kind,
+                )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error("Failed to assemble patient %d (%s): %s", patient_index, filename, e)
+                patients.append({
+                    "patient_index": patient_index,
+                    "source_file":   filename,
+                    "error":         str(e),
                 })
 
-        # ── Case B/C: single report (text+xray or xray-only) ─────────────────
-        if len(reports) == 1:
-            return reports[0]
+        if not patients:
+            raise HTTPException(
+                status_code=422,
+                detail="None of the uploaded files could be processed as medical reports.",
+            )
 
-        # ── Case D: multiple X-ray files ──────────────────────────────────────
+        # If every file failed validation / errored, surface a clear error
+        successful = [p for p in patients if "error" not in p]
+        if not successful:
+            reasons = "; ".join(p.get("error", "unknown error") for p in patients)
+            raise HTTPException(status_code=422, detail=f"All files rejected: {reasons}")
+
         return {
-            "is_multi_xray": True,
-            "total":         len(reports),
-            "reports":       reports,
+            "is_multi_patient": True,
+            "total_patients":   len(patients),
+            "patients":         patients,
         }
