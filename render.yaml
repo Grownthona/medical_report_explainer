@@ -20,12 +20,11 @@ services:
       - key: OLLAMA_ENABLED
         value: "false"
 
-  # React Frontend (Static Site)
-  - type: web
+  # React Frontend (Static Site - FREE)
+  - type: static
     name: medical-report-explainer
-    runtime: static
-    staticPublishPath: ./frontend/dist
     buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_BASE
         fromService:
