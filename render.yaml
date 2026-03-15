@@ -5,26 +5,26 @@ services:
     runtime: docker
     dockerContext: ./medical_ai
     dockerfilePath: Dockerfile
-    plan: starter # Starter plan is recommended for apps with heavy dependencies (OCR/ML)
+    plan: starter
     envVars:
       - key: CORS_ORIGINS
-        value: "https://medical-report-explainer.onrender.com" # Update this after frontend is deployed
+        value: "https://medical-report-explainer.onrender.com"
       - key: OPENAI_API_KEY
-        sync: false # Set in Render Dashboard
+        sync: false
       - key: GEMINI_API_KEY
-        sync: false # Set in Render Dashboard
+        sync: false
       - key: GOOGLE_TTS_API_KEY
-        sync: false # Set in Render Dashboard
+        sync: false
       - key: OPENAI_MODEL
         value: "gpt-4o-mini"
       - key: OLLAMA_ENABLED
         value: "false"
 
-  # React Frontend
-  - type: static
+  # React Frontend (Static Site)
+  - type: web
     name: medical-report-explainer
-
-    publishPath: ./frontend/dist
+    runtime: static
+    staticPublishPath: ./frontend/dist
     buildCommand: cd frontend && npm install && npm run build
     envVars:
       - key: VITE_API_BASE
@@ -32,6 +32,7 @@ services:
           type: web
           name: medical-ai-backend
           property: host
-    routingRules:
-      - route: /*
+    routes:
+      - type: rewrite
+        source: /*
         destination: /index.html
