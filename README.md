@@ -14,10 +14,10 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 
 ### AI Report Analysis
 <div align="center">
-<img src="https://github.com/user-attachments/assets/8c2a9f2d-4b34-485f-a7bb-1ba17d6662b2" width="30%" />
-<img src="https://github.com/user-attachments/assets/2dedf48f-d696-4174-b355-11bd51ceff58" width="33%" />
-<img src="https://github.com/user-attachments/assets/82360010-bfda-4b8f-ba62-1469b45c8cd0" width="33%" />
+<img src="https://github.com/user-attachments/assets/2dedf48f-d696-4174-b355-11bd51ceff58" width="48%" />
+<img src="https://github.com/user-attachments/assets/82360010-bfda-4b8f-ba62-1469b45c8cd0" width="48%" />
 </div>
+<img  width="1920" height="1336" src="https://github.com/user-attachments/assets/8c2a9f2d-4b34-485f-a7bb-1ba17d6662b2"/>
 
 ### ChatBot Conversation
 <div align="center">
