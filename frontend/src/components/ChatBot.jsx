@@ -1,9 +1,10 @@
+// ChatBot.jsx
 import "../styles/ChatBot.css";
 import { useState, useRef, useEffect } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
-export default function ChatBot({ patientData }) {
+export default function ChatBot({ patientData, language = "en" }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([
     {
@@ -35,7 +36,6 @@ export default function ChatBot({ patientData }) {
     setMessages(updatedMessages);
     setLoading(true);
 
-    // Build the history to send — skip the initial greeting (index 0)
     const history = updatedMessages
       .slice(1)
       .map((m) => ({ role: m.role, content: m.text }));
@@ -47,7 +47,7 @@ export default function ChatBot({ patientData }) {
         body: JSON.stringify({
           messages:     history,
           patient_data: patientData ?? null,
-          language:     "en",
+          language:     language,       // 👈 was hardcoded "en", now uses prop
         }),
       });
 
@@ -72,14 +72,21 @@ export default function ChatBot({ patientData }) {
     setLoading(false);
   };
 
+  // 👇 Reset chat when report data changes (new report uploaded)
+  useEffect(() => {
+    setMessages([
+      {
+        role: "assistant",
+        text: "Hi! I'm MediBot 🩺 Ask me anything about your report and I'll explain it in plain language.",
+      },
+    ]);
+  }, [patientData]);
+
   const unread = !open && messages.length > 1;
 
   return (
     <>
-      {/* SIDE PANEL */}
       <div className={`chatbot-panel ${open ? "chatbot-open" : "chatbot-closed"}`}>
-
-        {/* HEADER */}
         <div className="chatbot-header">
           <div className="chatbot-header-row">
             <div className="chatbot-title-group">
@@ -95,7 +102,6 @@ export default function ChatBot({ patientData }) {
           </div>
         </div>
 
-        {/* MESSAGES */}
         <div className="chatbot-messages">
           {messages.map((m, i) => (
             <div
@@ -129,7 +135,6 @@ export default function ChatBot({ patientData }) {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* INPUT */}
         <div className="chatbot-input-area">
           <div className="chatbot-input-row">
             <input
@@ -150,7 +155,7 @@ export default function ChatBot({ patientData }) {
           <p className="disclaimer">Always consult a doctor for medical decisions.</p>
         </div>
       </div>
-      {/* FLOAT BUTTON */}
+
       <button
         className={`chatbot-fab ${open ? "fab-open" : "fab-closed"}`}
         onClick={() => setOpen((v) => !v)}
@@ -161,14 +166,9 @@ export default function ChatBot({ patientData }) {
         {unread && !open && (
           <div
             style={{
-              position: "absolute",
-              top: -4,
-              right: -4,
-              width: 12,
-              height: 12,
-              borderRadius: "50%",
-              background: "#f43f5e",
-              border: "2px solid #070d1a",
+              position: "absolute", top: -4, right: -4,
+              width: 12, height: 12, borderRadius: "50%",
+              background: "#f43f5e", border: "2px solid #070d1a",
               boxShadow: "0 0 6px #f43f5e",
             }}
           />
@@ -180,6 +180,6 @@ export default function ChatBot({ patientData }) {
           </div>
         )}
       </button>
-    </> 
+    </>
   );
 }

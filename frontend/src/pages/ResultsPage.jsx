@@ -86,7 +86,7 @@ export default function ResultsPage({ data, language, onBack }) {
       </div>
 
       {/* Floating chat — always mounted, manages its own open/close state */}
-      <ChatBot patientData={currentData} />
+      <ChatBot patientData={currentData} language={language} />
     </div>
   );
 }
