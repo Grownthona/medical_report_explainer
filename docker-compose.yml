@@ -6,21 +6,31 @@ services:
       context: ./medical_ai
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:5173}
     volumes:
       - ./medical_ai:/app
       - /app/.venv # Prevent local virtualenv from interfering with the container
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Define the backend URL that the frontend will use (accessed via browser)
-        - VITE_API_BASE=http://localhost:8000
+        - VITE_API_BASE=${VITE_API_BASE:-http://localhost:8000}
     ports:
-      - "80:80"
+      - "${FRONTEND_PORT:-80}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped

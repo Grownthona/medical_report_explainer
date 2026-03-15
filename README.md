@@ -25,7 +25,10 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 -   **Multi-Patient Support**: Handles multi-page documents containing reports for different patients automatically.
 -   **Multi-Language Explanations**: Supports **English, Bengali (BN), Arabic (AR), Hindi (HI), and Urdu (UR)**.
 -   **Interactive Components**:
-    -   **ChatBot**: Get immediate answers about your medical findings.
+    -   **ChatBot (Graph RAG)**: 
+        -   **MediBot**: Uses a Graph-based Retrieval-Augmented Generation (RAG) system to navigate report structures.
+        -   **Web Enrichment**: Automatically fetches trusted medical definitions from **NIH MedlinePlus** for abnormal results.
+        -   **Multi-Patient Aware**: Remembers and distinguishes between different patients in a single conversation.
     -   **Voice Explainer**: Listen to the report summary and test explanations.
 -   **Modern UI**: Sleek, responsive frontend built with **React** and **Vite**.
 
@@ -70,6 +73,19 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 
 ---
 
+## ⚙️ Configuration & Environment Variables
+
+Create a `.env` file in the root directory (based on `.env.example`):
+
+| Variable | Description | Required |
+| :--- | :--- | :--- |
+| `OPENAI_API_KEY` | Your OpenAI API key for report analysis. | Yes |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google Cloud JSON key (for Text-to-Speech). | Optional |
+| `CORS_ORIGINS` | Comma-separated list of allowed origins. | Optional |
+| `VITE_API_BASE` | URL of the backend API (used during frontend build). | Optional |
+
+---
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -78,47 +94,46 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 -   **Tesseract OCR** (Required for some fallback paths)
 
 ### Docker Deployment (Recommended)
-The easiest way to run the entire application is using Docker.
+The easiest way to run the entire application is using Docker Compose.
 
-1.  Make sure you have [Docker](https://www.docker.com/) and Docker Compose installed.
-2.  Run the following command in the project root:
+1.  **Configure environment**:
     ```bash
-    docker-compose up --build -d
+    cp .env.example .env
+    # Edit .env and add your OPENAI_API_KEY
     ```
-3.  The application will be available at:
+2.  **Build and Run**:
+    ```bash
+    docker compose up --build -d
+    ```
+3.  **Access the application**:
     - **Frontend:** `http://localhost`
     - **Backend API:** `http://localhost:8000`
 
-### Local Backend Setup
-1.  Navigate to the backend directory:
+> [!NOTE]
+> On the first run, the backend will download several gigabytes of models for OCR (PaddleOCR) and X-ray analysis. This may take some time depending on your internet connection.
+
+### Local Development Setup
+
+#### Backend Setup
+1.  Navigate to `medical_ai`:
     ```bash
     cd medical_ai
-    ```
-2.  Create and activate a virtual environment:
-    ```bash
     python -m venv .venv
     source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-    ```
-3.  Install dependencies:
-    ```bash
     pip install -r requirements.txt
     ```
-4.  Run the server:
+2.  Run the server:
     ```bash
     fastapi dev app/main.py
     ```
-    The API will be available at `http://localhost:8000`.
 
-### Local Frontend Setup
-1.  Navigate to the frontend directory:
+#### Frontend Setup
+1.  Navigate to `frontend`:
     ```bash
     cd frontend
-    ```
-2.  Install dependencies:
-    ```bash
     npm install
     ```
-3.  Run the development server:
+2.  Run the development server:
     ```bash
     npm run dev
     ```
@@ -130,9 +145,11 @@ The easiest way to run the entire application is using Docker.
 
 -   `POST /extract/file`: Upload one or more medical report files (PDF/Images). Handles OCR → Analysis or X-ray classification.
 -   `POST /extract/text`: Direct submission of raw report text for analysis.
+-   `POST /tts`: Convert text to speech.
+-   `POST /chat`: Interactive MediBot.
 -   `GET /`: Health check and service metadata.
 
 ---
 
 ## 📄 License
-*Specify license here (e.g., MIT).*
+This project is licensed under the MIT License - see the LICENSE file for details.
