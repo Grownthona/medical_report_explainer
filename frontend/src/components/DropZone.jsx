@@ -51,7 +51,7 @@ export default function DropZone({ files = [], onFileChange }) {
       )}
 
       <div className="dropzone-subtitle">
-        PDF, JPG, PNG, WebP — up to 10 MB each
+        PDF, JPG, PNG — up to 10 MB each
       </div>
 
       {!files.length && <div className="dropzone-browse">Or browse files</div>}
