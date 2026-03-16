@@ -44,6 +44,8 @@ Response shapes:
 from __future__ import annotations
 
 import logging
+from typing import Callable
+
 from fastapi import HTTPException, UploadFile
 
 from services.ocr_service      import OCRService
@@ -66,12 +68,30 @@ class MultiFileProcessor:
     def __init__(
         self,
         ocr_service:      OCRService,
-        xray_service:     XRayService,
+        # Accepts either a ready XRayService instance OR a zero-argument
+        # callable that returns one (e.g. the lazy-loader from main.py).
+        # This matches how main.py passes `get_xray_service` (a function)
+        # rather than a pre-constructed instance.
+        xray_service:     XRayService | Callable[[], XRayService],
         report_validator: ReportValidator,
     ):
-        self._ocr       = ocr_service
-        self._xray      = xray_service
-        self._validator = report_validator
+        self._ocr            = ocr_service
+        self._xray_provider  = xray_service   # may be a function or an instance
+        self._validator      = report_validator
+
+    def _get_xray(self) -> XRayService:
+        """
+        Return the XRayService instance.
+
+        If _xray_provider is already an XRayService, return it directly.
+        If it is a callable (lazy loader), call it to get the instance.
+        This handles both:
+          MultiFileProcessor(ocr, XRayService(), validator)   # instance
+          MultiFileProcessor(ocr, get_xray_service, validator) # lazy fn
+        """
+        if callable(self._xray_provider) and not isinstance(self._xray_provider, XRayService):
+            return self._xray_provider()
+        return self._xray_provider  # type: ignore[return-value]
 
     async def process(self, files: list[UploadFile], language: str) -> dict:
 
@@ -107,7 +127,6 @@ class MultiFileProcessor:
         total_files = len(text_files) + len(xray_files)
 
         # ── Special case: 1 text + 1 x-ray → single mixed report ─────────────
-        # These almost certainly belong to the same patient.
         if len(text_files) == 1 and len(xray_files) == 1:
             fname_text, text      = text_files[0]
             fname_xray, xray_raw  = xray_files[0]
@@ -117,7 +136,7 @@ class MultiFileProcessor:
                 raise HTTPException(status_code=422, detail=validation.reason)
 
             try:
-                xray_result = self._xray.analyze(xray_raw)
+                xray_result = self._get_xray().analyze(xray_raw)
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"X-ray analysis failed: {e}")
 
@@ -125,20 +144,10 @@ class MultiFileProcessor:
             return assemble_report(text, language=language, xray_result=xray_result)
 
         # ── General case: each file is a separate patient ─────────────────────
-        # Build a flat ordered list: text files first (preserving upload order),
-        # then x-ray files. Re-sort by original upload index so the patient_index
-        # matches the order the user uploaded the files.
-        #
-        # We rebuild an ordered list of (filename, kind, payload) from the
-        # original zip so upload order is honoured.
         ordered: list[tuple[str, str, str | bytes]] = []
-        text_iter = iter(text_files)
-        xray_iter = iter(xray_files)
 
         for idx, (f, raw) in enumerate(zip(files, all_bytes)):
             filename = f.filename or f"file_{idx}"
-            # Decide which bucket this filename belongs to
-            # (text_files / xray_files were built in the same loop order)
             if any(fn == filename for fn, _ in text_files):
                 fn, t = next(
                     ((fn, t) for fn, t in text_files if fn == filename),
@@ -152,7 +161,7 @@ class MultiFileProcessor:
                 )
                 ordered.append((filename, "xray", rb))
 
-        # ── Single file fast-path (shouldn't normally reach here, but safety) ─
+        # ── Single file fast-path ─────────────────────────────────────────────
         if total_files == 1:
             filename, kind, payload = ordered[0]
             if kind == "text":
@@ -162,7 +171,7 @@ class MultiFileProcessor:
                 return assemble_report(payload, language=language)      # type: ignore[arg-type]
             else:
                 try:
-                    xray_result = self._xray.analyze(payload)           # type: ignore[arg-type]
+                    xray_result = self._get_xray().analyze(payload)     # type: ignore[arg-type]
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"X-ray analysis failed: {e}")
                 return assemble_report(xray_result=xray_result, language=language)
@@ -191,7 +200,7 @@ class MultiFileProcessor:
 
                 else:  # kind == "xray"
                     xray_raw = payload  # type: ignore[assignment]
-                    xray_result = self._xray.analyze(xray_raw)
+                    xray_result = self._get_xray().analyze(xray_raw)   # type: ignore[arg-type]
                     report = assemble_report(xray_result=xray_result, language=language)
 
                 report["patient_index"] = patient_index
@@ -218,7 +227,6 @@ class MultiFileProcessor:
                 detail="None of the uploaded files could be processed as medical reports.",
             )
 
-        # If every file failed validation / errored, surface a clear error
         successful = [p for p in patients if "error" not in p]
         if not successful:
             reasons = "; ".join(p.get("error", "unknown error") for p in patients)

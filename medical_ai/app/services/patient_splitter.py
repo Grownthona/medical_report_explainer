@@ -37,15 +37,66 @@ _PAGE_BREAK = "\n\n--- PAGE BREAK ---\n\n"
 _MIN_PATIENT_CHARS = 200
 
 # ══════════════════════════════════════════════════════════════════════════════
+# POSSESSIVE STRIPPING
+# Prevents "Mrs. Little's family" from being read as a new patient header.
+#
+# Two-pass strip — longest match first.
+# Pass 1: "'s" / "\u2019s" possessives  e.g. "Mrs. Little's"
+# Pass 2: bare "'" possessives           e.g. "Dr. Jones'"  (names ending in s)
+# A two-pass approach avoids variable-width lookbehinds (rejected by Python
+# 3.10's `re` module) and handles both straight (') and curly (\u2019) quotes.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_POSSESSIVE_S_RE = re.compile(
+    r"((?:mr|mrs|ms|dr)\.?\s{1,2}[A-Z][a-z]{1,20})['\u2019]s(?=\W|$)",
+    re.IGNORECASE,
+)
+_POSSESSIVE_APO_RE = re.compile(
+    r"((?:mr|mrs|ms|dr)\.?\s{1,2}[A-Z][a-z]{1,20})['\u2019](?=\W|$)",
+    re.IGNORECASE,
+)
+
+
+def _strip_possessives(text: str) -> str:
+    """
+    Remove possessive suffixes that immediately follow a title+name combo
+    so that 'Mrs. Little's family' and 'Dr. Jones' notes' don't generate
+    spurious header hits.
+
+    Uses two sequential capturing-group substitutions instead of a
+    variable-width lookbehind, which Python 3.10's `re` module rejects.
+    Handles straight ('), curly (\u2019), and bare-apostrophe forms.
+    """
+    text = _POSSESSIVE_S_RE.sub(r"\1", text)    # "Little's" -> "Little"
+    text = _POSSESSIVE_APO_RE.sub(r"\1", text)  # "Jones'"   -> "Jones"
+    return text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PATIENT BOUNDARY PATTERNS
+#
+# Key design constraint for the title+name pattern:
+#   "Mrs. Little" at the START of a demographic header line is a boundary.
+#   "Mrs. Little has no history..." mid-paragraph is NOT a boundary.
+#
+# We handle this with two mechanisms:
+#   1. The title+name pattern requires the line to END shortly after the name
+#      (line-end anchor $) — narrative sentences continue past the name.
+#   2. _NARRATIVE_LINE_PATTERNS acts as a secondary filter: any candidate
+#      position whose line matches a narrative pattern is suppressed.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _PATIENT_START_PATTERNS: list[re.Pattern] = [
     re.compile(p, re.IGNORECASE | re.MULTILINE)
     for p in [
+        # Explicit "Patient Name:" or "Name:" field — strongest signal.
         r"^\s*patient\s*(?:name)?\s*[:\-]\s*\S",
         r"^\s*name\s*[:\-]\s*[A-Z][a-z]",
-        r"^\s*(?:mr|mrs|ms|dr)\.?\s+[A-Z][a-z]",
+        # Title + name where the line ends right after the name.
+        # The $ anchor means this won't match "Mrs. Little has no history..."
+        # because that line continues past the name.
+        r"^\s*(?:mr|mrs|ms|dr)\.?\s+[A-Z][a-zA-Z\-]{1,30}\s*$",
+        # Structured demographic fields.
         r"^\s*reg(?:istration)?\s*(?:no|#|id)?\s*[:\-]\s*\w",
         r"^\s*patient\s*id\s*[:\-]\s*\w",
         r"^\s*pid\s*[:\-]\s*\w",
@@ -55,53 +106,142 @@ _PATIENT_START_PATTERNS: list[re.Pattern] = [
     ]
 ]
 
-# Patterns that extract the actual patient name value from a line.
+# Secondary suppression filter.
+# If a candidate header line matches any of these, it is narrative prose —
+# not a patient boundary — and must be discarded even if a start pattern fired.
+_NARRATIVE_LINE_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        # Title+name immediately followed by a verb or common connector word.
+        r"(?:mr|mrs|ms|dr)\.?\s+[A-Z][a-z]+\s+"
+        r"(?:is|are|was|were|has|have|had|does|did|do|"
+        r"reports|reported|denies|denied|describes|described|"
+        r"presents|presented|received|never|not|also|and|or|the|a)\b",
+        # Possessive — belt-and-suspenders on top of _strip_possessives.
+        r"(?:mr|mrs|ms|dr)\.?\s+[A-Z][a-z]+['\u2019]s?\b",
+    ]
+]
+
+
+def _is_narrative_line(line: str) -> bool:
+    """Return True if the line looks like prose rather than a header."""
+    return any(pat.search(line) for pat in _NARRATIVE_LINE_PATTERNS)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NAME EXTRACTION & NORMALISATION
+#
+# Problem: the same patient's name may appear in multiple formats:
+#   "Patient Name: Little, Aimee"  -> raw extracted value: "LITTLE, AIMEE"
+#   Narrative reference: "Mrs. Little"  -> if somehow extracted: "LITTLE"
+#   Another record field: "Name: Aimee Little" -> "AIMEE LITTLE"
+#
+# We normalise all of these to "FIRSTNAME LASTNAME" (space-separated, upper)
+# so that _names_are_different can compare them reliably.
+#
+# Additionally _names_are_different uses a last-name containment check so
+# that "LITTLE" and "AIMEE LITTLE" are recognised as the SAME person rather
+# than two different patients.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Patterns that extract the raw name value from a structured field line.
 # Tried in order; first match wins.
 _NAME_EXTRACT_PATTERNS: list[re.Pattern] = [
-    # Stop at common field separators: newline, digit run, or keywords like Age/Lab/Gender
+    # "Patient Name: Little, Aimee"  or  "Patient Name: JOHN DOE"
     re.compile(
-        r"patient\s*(?:name)?\s*[:\-]\s*([A-Z][A-Z\s\.\-]{2,40}?)(?=\s*(?:age|gender|lab|invoice|reg|dob|s/o|d/o|w/o|\d|\n|$))",
+        r"patient\s*(?:name)?\s*[:\-]\s*([A-Za-z][A-Za-z\s\.,\-]{2,40}?)"
+        r"(?=\s*(?:age|gender|lab|invoice|reg|dob|s/o|d/o|w/o|\d|\n|$))",
         re.IGNORECASE,
     ),
+    # "Name: John Doe"  or  "Name: Doe, John"
     re.compile(
-        r"^\s*name\s*[:\-]\s*([A-Z][a-zA-Z\s\.\-]{2,40}?)(?=\s*(?:age|gender|lab|invoice|reg|dob|\d|\n|$))",
+        r"^\s*name\s*[:\-]\s*([A-Za-z][A-Za-z\s\.,\-]{2,40}?)"
+        r"(?=\s*(?:age|gender|lab|invoice|reg|dob|\d|\n|$))",
         re.IGNORECASE | re.MULTILINE,
     ),
 ]
+
+# Detects "Last, First" format (comma present between two name parts).
+_LAST_FIRST_RE = re.compile(
+    r"^([A-Za-z\-]{2,30}),\s*([A-Za-z\-]{2,30})$"
+)
+
+
+def _normalise_name(raw: str) -> str:
+    """
+    Normalise a raw extracted name string to "FIRSTNAME LASTNAME" upper-case.
+
+    Handles:
+      "Little, Aimee"   -> "AIMEE LITTLE"   (Last, First format)
+      "LITTLE, AIMEE"   -> "AIMEE LITTLE"
+      "Aimee Little"    -> "AIMEE LITTLE"
+      "JOHN DOE"        -> "JOHN DOE"
+      "Little"          -> "LITTLE"          (single token — returned as-is)
+    """
+    raw = re.sub(r"\s+", " ", raw.strip()).upper()
+    m = _LAST_FIRST_RE.match(raw)
+    if m:
+        # Reverse "LAST, FIRST" -> "FIRST LAST"
+        return f"{m.group(2).strip()} {m.group(1).strip()}"
+    return raw
 
 
 def _extract_patient_name(text: str) -> str | None:
     """
     Extract and normalise the patient name from a text block.
-    Returns None if no name can be found.
+    Returns None if no structured name field can be found.
+
+    Always returns the name in "FIRSTNAME LASTNAME" order so that names
+    extracted from "Last, First" formatted fields compare correctly with
+    names extracted from "First Last" formatted fields.
     """
     for pat in _NAME_EXTRACT_PATTERNS:
         m = pat.search(text)
         if m:
-            name = re.sub(r"\s+", " ", m.group(1).strip()).upper()
-            # Reject very short or numeric matches (false positives)
-            if len(name) >= 3 and not name.isdigit():
+            raw  = m.group(1).strip()
+            name = _normalise_name(raw)
+            # Reject very short or purely numeric matches (false positives)
+            if len(name) >= 3 and not name.replace(" ", "").isdigit():
                 return name
     return None
 
 
 def _names_are_different(name_a: str | None, name_b: str | None) -> bool:
     """
-    Returns True only when BOTH names are known AND they are clearly different.
-    If either name is unknown we conservatively return False (same person).
+    Returns True only when BOTH names are known AND they are clearly different
+    people.
+
+    Conservative rules (any of these -> same person, return False):
+      - Either name is None.
+      - The names are identical.
+      - One name is a substring of the other (handles "LITTLE" vs "AIMEE LITTLE"
+        where only the last name was extractable from one snippet).
+      - The names share a common last-name token (last space-separated word).
+      - The edit-distance heuristic says they are close (OCR noise tolerance).
     """
     if not name_a or not name_b:
         return False
-    # Allow small OCR noise (e.g. "GRANTHANA RAHMAN" vs "GRANTHANA RAHIMAN")
-    # by requiring at least 4 chars of difference rather than exact mismatch.
-    return name_a != name_b and _edit_distance_exceeds(name_a, name_b, threshold=4)
+    if name_a == name_b:
+        return False
+
+    # Substring containment: "LITTLE" in "AIMEE LITTLE" -> same person.
+    if name_a in name_b or name_b in name_a:
+        return False
+
+    # Shared last-name token: "AIMEE LITTLE" and "LITTLE" share "LITTLE".
+    tokens_a = set(name_a.split())
+    tokens_b = set(name_b.split())
+    if tokens_a & tokens_b:                 # non-empty intersection
+        return False
+
+    # Edit-distance / prefix heuristic for OCR noise.
+    return _edit_distance_exceeds(name_a, name_b, threshold=4)
 
 
 def _edit_distance_exceeds(a: str, b: str, threshold: int) -> bool:
     """
-    Rough check: if the strings share a very long common prefix/suffix the
+    Rough check: if the strings share a very long common prefix the
     difference is likely OCR noise, not a different person.
-    Uses simple length+prefix heuristic (no full DP needed here).
     """
     if abs(len(a) - len(b)) > threshold:
         return True
@@ -111,44 +251,86 @@ def _edit_distance_exceeds(a: str, b: str, threshold: int) -> bool:
             common += 1
         else:
             break
-    # If >80 % of the shorter string matches from the start → same person
     similarity = common / max(len(a), len(b), 1)
     return similarity < 0.80
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADER DETECTION HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _page_has_patient_header(page: str) -> bool:
-    """True if any patient-start pattern matches anywhere in this page."""
-    return any(pat.search(page) for pat in _PATIENT_START_PATTERNS)
+    """True if the page contains at least one genuine patient-header line."""
+    page = _strip_possessives(page)
+    for pat in _PATIENT_START_PATTERNS:
+        for m in pat.finditer(page):
+            line_start = page.rfind("\n", 0, m.start()) + 1
+            line_end   = page.find("\n", m.end())
+            line = page[line_start: line_end if line_end != -1 else len(page)]
+            if not _is_narrative_line(line):
+                return True
+    return False
 
 
 def _find_header_positions(text: str) -> list[int]:
     """
-    Return sorted char positions where a new patient header starts.
-    Snaps each match to the beginning of its line.
-    Deduplicates positions within 5 chars of each other.
+    Return sorted char positions where a NEW patient header starts.
+
+    Rules (applied in order):
+      1. Strip possessives from the text before matching.
+      2. Reject any candidate line that looks like narrative prose.
+      3. Deduplicate by resolved patient name — same name = same patient,
+         skip the position.
+      4. If no name can be extracted from a position, SKIP it (unknown name
+         means we cannot confirm a new patient — conservative is correct).
+         The old proximity-guard fallback is intentionally absent.
     """
+    normalized = _strip_possessives(text)
+
     raw_positions: set[int] = set()
     for pattern in _PATIENT_START_PATTERNS:
-        for m in pattern.finditer(text):
-            line_start = text.rfind("\n", 0, m.start()) + 1
-            raw_positions.add(line_start)
+        for m in pattern.finditer(normalized):
+            line_start = normalized.rfind("\n", 0, m.start()) + 1
+            line_end   = normalized.find("\n", m.end())
+            line = normalized[line_start: line_end if line_end != -1 else len(normalized)]
+            if not _is_narrative_line(line):
+                raw_positions.add(line_start)
 
     sorted_pos = sorted(raw_positions)
+
+    # Deduplicate by resolved name.
+    # Unknown name (None) -> skip; we cannot confirm a new patient.
+    seen_names: list[str] = []   # list to preserve insertion order for token checks
     deduped: list[int] = []
+
     for pos in sorted_pos:
-        if not deduped or pos - deduped[-1] > 5:
-            deduped.append(pos)
+        snippet = normalized[pos: pos + 300]
+        name = _extract_patient_name(snippet)
+
+        if name:
+            # Check against every already-seen name, not just the last one,
+            # because a document may have preamble + patient A + patient B.
+            if not any(not _names_are_different(name, seen) for seen in seen_names):
+                seen_names.append(name)
+                deduped.append(pos)
+            else:
+                logger.debug(
+                    "_find_header_positions: skipping pos %d, "
+                    "name '%s' matches an already-recorded patient", pos, name,
+                )
+        else:
+            logger.debug(
+                "_find_header_positions: skipping pos %d, "
+                "no extractable name (narrative reference assumed)", pos,
+            )
+
     return deduped
 
 
 def _merge_short_chunks(chunks: list[str]) -> list[str]:
     """
-    Merge chunks that are too short (cover pages, headers-only fragments)
+    Merge chunks that are too short (cover pages, header-only fragments)
     into the immediately preceding chunk.
-
-    A chunk is only merged away if it is short AND contains no patient-header
-    pattern — i.e. it is purely a preamble/footer, not an actual patient record.
-    Real patient records (even short ones) are always kept as their own chunk.
     """
     if not chunks:
         return chunks
@@ -166,7 +348,6 @@ def _merge_short_chunks(chunks: list[str]) -> list[str]:
         else:
             merged.append(chunk)
 
-    # Edge case: first chunk is a short preamble with no patient header
     if len(merged) > 1 and _is_preamble(merged[0]):
         merged[1] = merged[0] + "\n\n" + merged[1]
         merged = merged[1:]
@@ -183,33 +364,27 @@ def _find_new_patient_pages(pages: list[str]) -> list[int]:
     Walk through pages and return the indices that start a NEW patient.
 
     A page starts a new patient only when ALL of the following are true:
-      1. It contains a patient-header pattern.
-      2. The patient name found on it DIFFERS from the name on the most
-         recently seen patient-header page.
-
-    Page index 0 (or the first page with a header) always opens patient #1.
+      1. It contains a genuine patient-header line (not narrative prose).
+      2. The patient name found on it DIFFERS from the most recently seen name.
     """
     new_patient_page_indices: list[int] = []
     last_known_name: str | None = None
 
     for i, page in enumerate(pages):
         if not _page_has_patient_header(page):
-            continue  # continuation page — skip
+            continue
 
-        name = _extract_patient_name(page)
+        name = _extract_patient_name(_strip_possessives(page))
 
         if last_known_name is None:
-            # First header seen → always opens patient #1
             new_patient_page_indices.append(i)
             last_known_name = name
         elif _names_are_different(last_known_name, name):
-            # Genuinely different name → new patient
             new_patient_page_indices.append(i)
             last_known_name = name
         else:
-            # Same name (or name unknown) → continuation of current patient
             logger.debug(
-                "Page %d: same patient ('%s' ≈ '%s'), treating as continuation",
+                "Page %d: same patient ('%s' ~ '%s'), treating as continuation",
                 i, last_known_name, name,
             )
 
@@ -236,17 +411,15 @@ def is_multi_patient(text: str) -> bool:
             )
             return True
 
-    # Flat-text fallback: look for distinct names at header positions
     positions = _find_header_positions(text)
     if len(positions) >= 2:
         names = set()
         for pos in positions:
-            snippet = text[pos: pos + 300]
+            snippet = _strip_possessives(text[pos: pos + 300])
             name = _extract_patient_name(snippet)
             if name:
                 names.add(name)
         if len(names) >= 2:
-            # Final check: are they genuinely different?
             name_list = list(names)
             for i in range(len(name_list)):
                 for j in range(i + 1, len(name_list)):
@@ -286,31 +459,25 @@ def split_patients(text: str) -> list[str]:
                 if not page.strip():
                     continue
                 if i in boundary_set:
-                    # New patient — always open a fresh chunk
                     chunks.append(page.strip())
                 else:
-                    # Continuation page — belongs to the most recent patient
                     if chunks:
                         chunks[-1] = chunks[-1] + "\n\n" + page.strip()
                     else:
-                        # Preamble before any patient header
                         chunks.append(page.strip())
 
             result = _merge_short_chunks(chunks)
             if len(result) >= 2:
                 return result
-            # Fall through if merging collapsed everything to 1 chunk
 
     # ── Strategy 2: repeated-header split in flat text (distinct names only) ─
     positions = _find_header_positions(text)
     if len(positions) >= 2:
-        # Collect name per position
         named_positions: list[tuple[int, str | None]] = []
         for pos in positions:
-            snippet = text[pos: pos + 300]
+            snippet = _strip_possessives(text[pos: pos + 300])
             named_positions.append((pos, _extract_patient_name(snippet)))
 
-        # Walk positions; only open a new chunk when the name genuinely changes
         boundary_positions: list[int] = []
         last_name: str | None = None
         for pos, name in named_positions:
@@ -320,7 +487,6 @@ def split_patients(text: str) -> list[str]:
             elif _names_are_different(last_name, name):
                 boundary_positions.append(pos)
                 last_name = name
-            # else: same patient, skip
 
         if len(boundary_positions) >= 2:
             logger.info(

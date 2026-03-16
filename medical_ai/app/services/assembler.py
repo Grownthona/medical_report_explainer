@@ -245,7 +245,8 @@ def _assemble_single(
                 "name": None, "age_years": None, "gender": "unknown",
                 "report_type": "Chest X-Ray", "collection_date": None,
             },
-            "sections": {"XRAY": [xray_section]},
+            "report":   xray_section,   # ← was: "sections": {"XRAY": [xray_section]}
+            "sections": {},             # ← added
             "summary":  _compute_summary(all_tests).to_dict(),
         }
 
