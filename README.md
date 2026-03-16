@@ -10,6 +10,7 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 
 <img width="1920" height="1336" alt="Image" src="https://github-production-user-asset-6210df.s3.amazonaws.com/78976756/564061677-de059eed-860a-46ce-88ce-27a9bee3e4b8.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260316%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260316T101947Z&X-Amz-Expires=300&X-Amz-Signature=56f83ad167309b8057730c4bea3551e87476204cb61b17797f268f0940c105ec&X-Amz-SignedHeaders=host" />
 
+
 ### AI Report Analysis
 <img width="1920" height="1932" alt="Image" src="https://github-production-user-asset-6210df.s3.amazonaws.com/78976756/564062071-d124bb27-e0d3-4d26-862a-206883dee574.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260316%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260316T102112Z&X-Amz-Expires=300&X-Amz-Signature=d18241c4caef9a6b9128882adbf0ccd4257c0684a352d020893e84ebcd10127a&X-Amz-SignedHeaders=host" />
 
