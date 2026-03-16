@@ -8,16 +8,15 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 
 ### Upload Page
 
-<img width="1920" height="1336" alt="Image" src="https://github-production-user-asset-6210df.s3.amazonaws.com/78976756/564061677-de059eed-860a-46ce-88ce-27a9bee3e4b8.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260316%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260316T101947Z&X-Amz-Expires=300&X-Amz-Signature=56f83ad167309b8057730c4bea3551e87476204cb61b17797f268f0940c105ec&X-Amz-SignedHeaders=host" />
-
+<img width="1920" height="1336" alt="Image" src="https://github.com/user-attachments/assets/de059eed-860a-46ce-88ce-27a9bee3e4b8" />
 
 ### AI Report Analysis
-<img width="1920" height="1932" alt="Image" src="https://github-production-user-asset-6210df.s3.amazonaws.com/78976756/564062071-d124bb27-e0d3-4d26-862a-206883dee574.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260316%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260316T102112Z&X-Amz-Expires=300&X-Amz-Signature=d18241c4caef9a6b9128882adbf0ccd4257c0684a352d020893e84ebcd10127a&X-Amz-SignedHeaders=host" />
+<img width="1920" height="1932" alt="Image" src="https://github.com/user-attachments/assets/d124bb27-e0d3-4d26-862a-206883dee574" />
 
 ### ChatBot Conversation
-<img width="960" height="412" alt="Image" src="https://github-production-user-asset-6210df.s3.amazonaws.com/78976756/564062187-3b19d8de-a305-4545-9c4c-25594285f532.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260316%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260316T102135Z&X-Amz-Expires=300&X-Amz-Signature=5ee414f85d2802007f052d30d27452786174f88c587f619e895f7287ba71ded5&X-Amz-SignedHeaders=host" />
+<img width="960" height="412" alt="Image" src="https://github.com/user-attachments/assets/3b19d8de-a305-4545-9c4c-25594285f532" />
 
-<img width="959" height="413" alt="Image" src="https://github-production-user-asset-6210df.s3.amazonaws.com/78976756/564062236-a9f721a0-f2e5-4119-88ff-f5d30a56409b.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20260316%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260316T102206Z&X-Amz-Expires=300&X-Amz-Signature=bc39579e56a969b27e4903d71222dd672963b6190f40fcd30d53fd5dcd6884b9&X-Amz-SignedHeaders=host" />
+<img width="959" height="413" alt="Image" src="https://github.com/user-attachments/assets/a9f721a0-f2e5-4119-88ff-f5d30a56409b" />
 
 ---
 
