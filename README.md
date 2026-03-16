@@ -7,23 +7,15 @@ An AI-powered system designed to transform complex medical reports into easy-to-
 ## 📸 Screenshots
 
 ### Upload Page
-<div align="center">
-<img src="https://github.com/user-attachments/assets/6e92691b-2264-4acf-aeda-342856dd3a0c" width="48%" />
-<img src="https://github.com/user-attachments/assets/a1bd996e-7903-4f36-8373-f3b93e43fea5" width="48%" />
-</div>
+
+<img width="1920" height="1336" src="https://github.com/user-attachments/assets/6e92691b-2264-4acf-aeda-342856dd3a0c" />
 
 ### AI Report Analysis
-<div align="center">
-<img src="https://github.com/user-attachments/assets/2dedf48f-d696-4174-b355-11bd51ceff58" width="48%" />
-<img src="https://github.com/user-attachments/assets/82360010-bfda-4b8f-ba62-1469b45c8cd0" width="48%" />
-</div>
 <img  width="1920" height="1336" src="https://github.com/user-attachments/assets/8c2a9f2d-4b34-485f-a7bb-1ba17d6662b2"/>
 
 ### ChatBot Conversation
-<div align="center">
 <img width="1920" height="1336" src="https://github.com/user-attachments/assets/c18b8d62-8517-4d6e-a4f3-e5bc4a9dddcc" />
 <img width="1920" height="1336" src="https://github.com/user-attachments/assets/adaf9481-a380-4469-9968-640d433f514f" />
-</div>
 
 ---
 
